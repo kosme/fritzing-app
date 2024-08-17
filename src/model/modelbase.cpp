@@ -856,13 +856,13 @@ ModelPart * ModelBase::createOldSchematicPartAux(ModelPart * modelPart, const QS
 		DebugDialog::debug(QString("Unable to open :%1").arg(path));
 	}
 	QDomDocument oldDoc;
-	QDomDocument::ParseResult parseResult = oldDoc.setContent(&newFzp);
-	if (!parseResult.operator bool()) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	QString msg;
+	int line;
+	int column;
+	if (!oldDoc.setContent(&newFzp, &msg, &line, &column)){
 		QString logMessage = QString("Parse Error: %1 at line %2, column %3 in %4")
-								 .arg(parseResult.errorMessage)
-								 .arg(parseResult.errorLine)
-								 .arg(parseResult.errorColumn)
-								 .arg(path);
+		.arg(msg).arg(line).arg(column).arg(path);
 		DebugDialog::debug(logMessage);
 		return nullptr;
 	}

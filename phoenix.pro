@@ -18,8 +18,8 @@
 #
 # ********************************************************************
 
-QT_LEAST=6.5.3
-QT_MOST=6.5.10
+QT_LEAST=6.2.0
+QT_MOST=6.7.10
 !versionAtLeast(QT_VERSION, $${QT_LEAST}):error("Use at least Qt version $${QT_LEAST}")
 !versionAtMost(QT_VERSION, $${QT_MOST}):error("Use at most Qt version $${QT_MOST}")
 

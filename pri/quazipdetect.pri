@@ -3,9 +3,9 @@
 message("Using Fritzing quazip detect script.")
 
 QUAZIP_VERSION=1.4
-QUAZIP_PATH=$$absolute_path($$PWD/../../quazip-$$QT_VERSION-$$QUAZIP_VERSION)
-QUAZIP_INCLUDE_PATH=$$QUAZIP_PATH/include/QuaZip-Qt6-$$QUAZIP_VERSION
-QUAZIP_LIB_PATH=$$QUAZIP_PATH/lib
+QUAZIP_PATH=$$absolute_path($$PWD/../../quazip-$$QUAZIP_VERSION)
+QUAZIP_INCLUDE_PATH=$$QUAZIP_PATH
+QUAZIP_LIB_PATH=$$QUAZIP_PATH/lib/quazip
 
 SOURCES += \
 	src/zlibdummy.c \
@@ -21,7 +21,7 @@ LIBS += -L$$QUAZIP_LIB_PATH -lquazip1-qt$$QT_MAJOR_VERSION
 
 unix {
 	message("set rpath for quazip")
-	QMAKE_RPATHDIR += $$QUAZIP_LIB_PATH
+	QMAKE_RPATHDIR += $$QUAZIP_LIB_PATH	
 }
 
 macx {

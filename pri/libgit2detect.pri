@@ -17,9 +17,8 @@
 # Linux uses 1.7.1 dynamic linked (for working with openssl 3)
 # macOS uses 1.7.1 static linked
 
-# Use libgit2 1.7.1 ( https://github.com/libgit2/libgit2/pull/6471 )
-LIBGIT_VERSION=1.7.1
-LIBGITPATH = $$absolute_path($$_PRO_FILE_PWD_/../libgit2-$$LIBGIT_VERSION)
+
+LIBGITPATH = $$absolute_path($$_PRO_FILE_PWD_/../libgit2)
 
 unix:!macx {
 	LIBGIT_STATIC = false
@@ -27,6 +26,7 @@ unix:!macx {
 	LIBGIT_STATIC = true
 }
 
+LIBGIT2LIB = $$LIBGITPATH/lib
 
 win32 {
 	if ($$LIBGIT_STATIC) {
@@ -43,13 +43,7 @@ win32 {
 		}
 	}
 
-    contains(QMAKE_TARGET.arch, x86_64) {
-        LIBGIT2LIB = "$$_PRO_FILE_PWD_/../libgit2/build64/Release"
-    } else {
-        LIBGIT2LIB = "$$_PRO_FILE_PWD_/../libgit2/build32/Release"
-    }
-
-    exists($$LIBGIT2LIB/git2.lib) {
+	exists($$LIBGIT2LIB/libgit2.dll) {
         message("found libgit2 library in $$LIBGIT2LIB")
     } else {
         error("libgit2 library not found in $$LIBGIT2LIB")
@@ -75,14 +69,17 @@ unix {
 			LIBS += $$LIBGIT2LIB/libgit2.a -lssl -lcrypto
 		}
 	} else {
-		message("Enabled dynamic linking of libgit2 $$LIBGIT_VERSION")
-		INCLUDEPATH += $$LIBGITPATH/include
-		LIBS += -L$$LIBGIT2LIB -lgit2
-		!macx {
-			QMAKE_RPATHDIR += $$LIBGIT2LIB
+		exists($$LIBGIT2LIB) {
+			message("Enabled dynamic linking of libgit2")
+			INCLUDEPATH += $$LIBGITPATH/include
+				message("libgit: $${INCLUDEPATH}")
+			LIBS += -L$$LIBGIT2LIB -lgit2
+			!macx {
+				QMAKE_RPATHDIR += $$LIBGIT2LIB
+			}
+		} else {
+			error("Could not find $$LIBGIT2LIB")
 		}
-		#PKG_CONFIG_PATH=$$LIBGITPATH/lib/pkgconfig:$$PKG_CONFIG_PATH
-		#PKGCONFIG += libgit2
 	}
 }
 
