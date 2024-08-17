@@ -1774,7 +1774,7 @@ void SketchWidget::dragEnterEvent(QDragEnterEvent *event)
 			m_movingItem = new QGraphicsSvgItem();
 			m_movingItem->setSharedRenderer(other->m_movingSVGRenderer);
 			this->scene()->addItem(m_movingItem);
-			m_movingItem->setPos(mapToScene(event->pos()) - other->m_movingSVGOffset);
+			m_movingItem->setPos(mapToScene(event->position().toPoint()) - other->m_movingSVGOffset);
 		}
 		event->acceptProposedAction();
 	}
@@ -1834,7 +1834,7 @@ bool SketchWidget::dragEnterEventAux(QDragEnterEvent *event) {
 		m_droppingItem->setVisible(true);
 	}
 	else {
-		if (!setDroppingItemAndOffset(event->pos(), offset, modelPart)) {
+		if (!setDroppingItemAndOffset(event->position().toPoint(), offset, modelPart)) {
 			return false;
 		}
 
@@ -1904,14 +1904,14 @@ void SketchWidget::dragLeaveEvent(QDragLeaveEvent * event) {
 void SketchWidget::dragMoveEvent(QDragMoveEvent *event)
 {
 	if (event->mimeData()->hasFormat("application/x-dnditemdata")) {
-		dragMoveHighlightConnector(event->pos());
+		dragMoveHighlightConnector(event->position().toPoint());
 		event->acceptProposedAction();
 		return;
 	}
 
 	if (event->mimeData()->hasFormat("application/x-dndsketchdata")) {
 		if (event->source() == this) {
-			m_globalPos = this->mapToGlobal(event->pos());
+			m_globalPos = this->mapToGlobal(event->position().toPoint());
 			if ((QApplication::keyboardModifiers() & Qt::ShiftModifier) != 0) {
 				QPointF p = GraphicsUtils::calcConstraint(m_mousePressGlobalPos, m_globalPos);
 				m_globalPos.setX(p.x());
@@ -1926,7 +1926,7 @@ void SketchWidget::dragMoveEvent(QDragMoveEvent *event)
 			if (!other) {
 				throw "drag move event from unknown source";
 			}
-			m_movingItem->setPos(mapToScene(event->pos()) - other->m_movingSVGOffset);
+			m_movingItem->setPos(mapToScene(event->position().toPoint()) - other->m_movingSVGOffset);
 		}
 		event->acceptProposedAction();
 		return;
@@ -1990,11 +1990,11 @@ void SketchWidget::dropEvent(QDropEvent *event)
 			other->copyDrop();
 			QPointF startLocal = other->mapFromGlobal(QPoint(other->m_mousePressGlobalPos.x(), other->m_mousePressGlobalPos.y()));
 			QPointF sceneLocal = other->mapToScene(startLocal.x(), startLocal.y());
-			m_pasteOffset = this->mapToScene(event->pos()) - sceneLocal;
+			m_pasteOffset = this->mapToScene(event->position().toPoint()) - sceneLocal;
 
 			DebugDialog::debug(QString("drop from other (%1, %2), event (%3, %4)")
 			                   .arg(startLocal.x()).arg(startLocal.y())
-			                   .arg(event->pos().x()).arg(event->pos().y())
+			                   .arg(event->position().toPoint().x()).arg(event->position().toPoint().y())
 			                  );
 			m_pasteCount = 0;
 			Q_EMIT dropPasteSignal(this);
@@ -2020,7 +2020,7 @@ void SketchWidget::putItemByModuleID(const QString  & moduleID) {
 	QDropEvent * event = new QDropEvent(pos, Qt::IgnoreAction, nullptr, Qt::NoButton, Qt::NoModifier);
 	QPointF offset;
 
-	if (!setDroppingItemAndOffset(event->pos(), offset, modelPart)) {
+	if (!setDroppingItemAndOffset(event->position().toPoint(), offset, modelPart)) {
 		delete event;
 		return;
 	}
@@ -2125,7 +2125,7 @@ void SketchWidget::dropItemEvent(QDropEvent *event) {
 
 	event->acceptProposedAction();
 
-	Q_EMIT dropSignal(event->pos());
+	Q_EMIT dropSignal(event->position().toPoint());
 }
 
 SelectItemCommand* SketchWidget::stackSelectionState(bool pushIt, QUndoCommand * parentCommand) {
@@ -2234,7 +2234,7 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 		setDragMode(QGraphicsView::ScrollHandDrag);
 		setCursor(Qt::OpenHandCursor);
 		// make the event look like a left button press to fool the underlying drag mode implementation
-		event = hackEvent = new QMouseEvent(event->type(), event->pos(), event->globalPos(), Qt::LeftButton, event->buttons() | Qt::LeftButton, event->modifiers());
+		event = hackEvent = new QMouseEvent(event->type(), event->position().toPoint(), event->globalPosition().toPoint(), Qt::LeftButton, event->buttons() | Qt::LeftButton, event->modifiers());
 	}
 
 	m_dragBendpointWire = nullptr;
@@ -2252,11 +2252,11 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 	m_savedWires.clear();
 	m_moveEventCount = 0;
 	m_holdingSelectItemCommand = stackSelectionState(false, nullptr);
-	m_mousePressScenePos = mapToScene(event->pos());
-	m_mousePressGlobalPos = event->globalPos();
+	m_mousePressScenePos = mapToScene(event->position().toPoint());
+	m_mousePressGlobalPos = event->globalPosition().toPoint();
 
 	squashShapes(m_mousePressScenePos);
-	QList<QGraphicsItem *> items = this->items(event->pos());
+	QList<QGraphicsItem *> items = this->items(event->position().toPoint());
 	QGraphicsItem* wasItem = getClickedItem(items);
 
 	m_anyInRotation = false;
@@ -2268,7 +2268,7 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 		return;
 	}
 
-	items = this->items(event->pos());
+	items = this->items(event->position().toPoint());
 	QGraphicsItem* item = getClickedItem(items);
 	if (item != wasItem) {
 		// if the item was deleted during mousePressEvent
@@ -2336,7 +2336,7 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 			else {
 				m_dragCurve = curvyWiresIndicated(event->modifiers()) && wire->canHaveCurve();
 				m_dragBendpointWire = wire;
-				m_dragBendpointPos = event->pos();
+				m_dragBendpointPos = event->position().toPoint();
 				if (m_connectorDragWire) {
 					// if you happen to drag on a wire which is on top of a connector
 					// drag the bendpoint on the wire rather than the new wire from the connector
@@ -2361,7 +2361,7 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 				auto * connectorItem = dynamic_cast<ConnectorItem *>(item);
 				if (connectorItem) {
 					m_draggingBendpoint = (connectorItem->connectionsCount() > 0);
-					this->m_alignmentStartPoint = mapToScene(event->pos()) - connectorItem->sceneAdjustedTerminalPoint(nullptr);
+					this->m_alignmentStartPoint = mapToScene(event->position().toPoint()) - connectorItem->sceneAdjustedTerminalPoint(nullptr);
 				}
 			}
 		}
@@ -2977,7 +2977,7 @@ void SketchWidget::mouseMoveEvent(QMouseEvent *event) {
 
 	if (m_movingByArrow) return;
 
-	QPointF scenePos = mapToScene(event->pos());
+	QPointF scenePos = mapToScene(event->position().toPoint());
 
 	double posx = scenePos.x() / GraphicsUtils::SVGDPI;
 	double posy = scenePos.y() / GraphicsUtils::SVGDPI;
@@ -3010,7 +3010,7 @@ void SketchWidget::mouseMoveEvent(QMouseEvent *event) {
 
 	if (m_savedItems.count() > 0) {
 		if ((event->buttons() & Qt::LeftButton) && !draggingWireEnd()) {
-			m_globalPos = event->globalPos();
+			m_globalPos = event->globalPosition().toPoint();
 			if ((m_globalPos - m_mousePressGlobalPos).manhattanLength() >= QApplication::startDragDistance()) {
 				auto *mimeData = new QMimeData;
 				mimeData->setData("application/x-dndsketchdata", nullptr);
@@ -3053,7 +3053,7 @@ void SketchWidget::mouseMoveEvent(QMouseEvent *event) {
 
 	if (draggingWireEnd()) {
 		// DebugDialog::debug("dragging wire end");
-		checkAutoscroll(event->globalPos());
+		checkAutoscroll(event->globalPosition().toPoint());
 	}
 
 	QList<ItemBase *> squashed;
@@ -3209,7 +3209,7 @@ void SketchWidget::mouseReleaseEvent(QMouseEvent *event) {
 		QMouseEvent * hackEvent = nullptr;
 		if (m_middleMouseIsPressed) {
 			// make the event look like a left button press to fool the underlying drag mode implementation
-			event = hackEvent = new QMouseEvent(event->type(), event->pos(), event->globalPos(), Qt::LeftButton, event->buttons() | Qt::LeftButton, event->modifiers());
+			event = hackEvent = new QMouseEvent(event->type(), event->position().toPoint(), event->globalPosition().toPoint(), Qt::LeftButton, event->buttons() | Qt::LeftButton, event->modifiers());
 		}
 
 		InfoGraphicsView::mouseReleaseEvent(event);
@@ -10220,7 +10220,7 @@ void SketchWidget::contextMenuEvent(QContextMenuEvent *event)
 
 void SketchWidget::mouseDoubleClickEvent(QMouseEvent *event)
 {
-	squashShapes(mapToScene(event->pos()));
+	squashShapes(mapToScene(event->position().toPoint()));
 	InfoGraphicsView::mouseDoubleClickEvent(event);
 	unsquashShapes();
 }

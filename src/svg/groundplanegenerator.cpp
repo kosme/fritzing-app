@@ -391,7 +391,7 @@ Paths findPolygonForPoint(PolyTree &tree, IntPoint seedPoint) {
 // this sorts a polygon tree to a list<(contour, hole1, hole2, ...)>
 void sortPolygons(PolyTree &tree, QList<Paths> &polygons) {
 	QList<PolyNode *> contours;
-		foreach(PolyNode *initialNode, tree.Childs) {
+		for (const auto &initialNode : tree.Childs){
 			contours.append(initialNode);
 		}
 	while (contours.length()) {
