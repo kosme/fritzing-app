@@ -420,7 +420,7 @@ void Simulator::showSimulatorError(QWidget* parent, const QString& errorHint, co
 void Simulator::showSimulationResults() {
 	//Check that we have the sim results for this time step
 	auto timeInfo = m_simulator->getVecInfo(QString("time").toStdString());
-	auto elapsedAnimationTime = m_elapsedAnimationTimer.elapsed();
+	// auto elapsedAnimationTime = m_elapsedAnimationTimer.elapsed();
 	m_elapsedAnimationTimer.restart();
 
 	//Calculate the time step to show
