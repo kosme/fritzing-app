@@ -881,6 +881,8 @@ void MainWindow::createEditMenuActions() {
 	m_redoAct->setShortcuts(QKeySequence::Redo);
 	m_redoAct->setText(tr("Redo"));
 
+	m_undoShortcut = new QShortcut(this);
+
 	m_cutAct = new QAction(tr("&Cut"), this);
 	m_cutAct->setShortcut(QKeySequence::Cut);
 	m_cutAct->setStatusTip(tr("Cut selection"));
@@ -2829,7 +2831,7 @@ void MainWindow::createTraceMenuActions() {
 	connect(m_selectAllCopperFillAct, SIGNAL(triggered()), this, SLOT(selectAllCopperFill()));
 
 	m_updateRoutingStatusAct = new QAction(tr("Force Update Routing Status and Ratsnests"), this);
-	m_updateRoutingStatusAct->setStatusTip(tr("Recalculate routing status and ratsnest wires (in case the auto-update isn't working correctly)"));
+	m_updateRoutingStatusAct->setStatusTip(tr("Recalculate routing status and ratsnest lines (in case the auto-update isn't working correctly)"));
 	connect(m_updateRoutingStatusAct, SIGNAL(triggered()), this, SLOT(updateRoutingStatus()));
 
 	m_selectAllExcludedTracesAct = new QAction(tr("Select All \"Don't Autoroute\" Traces"), this);
@@ -3930,6 +3932,22 @@ void MainWindow::onShareOnlineFinished() {
 		FMessageBox::critical(this, tr("Fritzing"), QString("Online sharing is currently not available."));
 	}
 	reply->deleteLater();
+}
+
+void MainWindow::disableUndoAction() {
+	m_undoAct->setShortcuts({});
+	m_redoAct->setShortcuts({});
+
+	// Set temporary shortcuts to show the disabled message
+	m_undoShortcut->setKey(QKeySequence::Undo);
+}
+
+void MainWindow::enableUndoAction() {
+	// Clear the shortcuts from the warning shortcut
+	m_undoShortcut->setKey(QKeySequence());
+
+	m_undoAct->setShortcuts(QKeySequence::Undo);
+	m_redoAct->setShortcuts(QKeySequence::Redo);
 }
 
 void MainWindow::selectAllObsolete() {

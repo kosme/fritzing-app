@@ -11,3 +11,4 @@ exists($$absolute_path($$_PRO_FILE_PWD_/../svgpp)) {
 
 message("including $$absolute_path($${SVGPPPATH}/include)")
 INCLUDEPATH += $$absolute_path($${SVGPPPATH}/include)
+
