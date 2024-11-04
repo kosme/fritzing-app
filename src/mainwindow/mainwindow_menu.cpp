@@ -1341,7 +1341,7 @@ void MainWindow::createMenus()
 	createTraceMenus();
 	createHelpMenu();
 
-	auto * actionProbe = new FProbeActions("MenuBar", menuBar());
+	new FProbeActions("MenuBar", menuBar());
 }
 
 QMenu * MainWindow::createRotateSubmenu(QMenu * parentMenu) {
@@ -3414,7 +3414,7 @@ QMenu *MainWindow::breadboardItemMenu() {
 	auto *menu = new QMenu(QObject::tr("Part"), this);
 	createRotateSubmenu(menu);
 	viewItemMenuAux(menu);
-	auto * probe = new FProbeActions("BreadboardItem", menu);
+	new FProbeActions("BreadboardItem", menu);
 	return menu;
 }
 
@@ -3424,7 +3424,7 @@ QMenu *MainWindow::schematicItemMenu() {
 	menu->addAction(m_flipHorizontalAct);
 	menu->addAction(m_flipVerticalAct);
 	viewItemMenuAux(menu);
-	auto * probe = new FProbeActions("SchematicItem", menu);
+	new FProbeActions("SchematicItem", menu);
 	return menu;
 
 }
@@ -3439,7 +3439,7 @@ QMenu *MainWindow::pcbItemMenu() {
 	m_convertToBendpointSeparator = menu->addSeparator();
 	menu->addAction(m_setOneGroundFillSeedAct);
 	menu->addAction(m_clearGroundFillSeedsAct);
-	auto * probe = new FProbeActions("PCBItem", menu);
+	new FProbeActions("PCBItem", menu);
 	return menu;
 }
 
@@ -3472,7 +3472,7 @@ QMenu *MainWindow::breadboardWireMenu() {
 #endif
 
 	connect( menu, SIGNAL(aboutToShow()), this, SLOT(updateWireMenu()));
-	auto * probe = new FProbeActions("BreadboardWire", menu);
+	new FProbeActions("BreadboardWire", menu);
 	return menu;
 }
 
@@ -3498,7 +3498,7 @@ QMenu *MainWindow::pcbWireMenu() {
 #endif
 
 	connect(menu, SIGNAL(aboutToShow()), this, SLOT(updateWireMenu()));
-	auto * probe = new FProbeActions("PCBWire", menu);
+	new FProbeActions("PCBWire", menu);
 	return menu;
 }
 
@@ -3530,7 +3530,7 @@ QMenu *MainWindow::schematicWireMenu() {
 #endif
 
 	connect( menu, SIGNAL(aboutToShow()), this, SLOT(updateWireMenu()));
-	auto * probe = new FProbeActions("SchematicWire", menu);
+	new FProbeActions("SchematicWire", menu);
 	return menu;
 }
 

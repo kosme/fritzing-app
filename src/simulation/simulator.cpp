@@ -660,7 +660,7 @@ double Simulator::getVectorValueOrDefault(unsigned long timeStep, const std::str
 	if (vecInfo.empty()) {
 		return defaultValue;
 	} else {
-		if (timeStep < 0 || timeStep >= vecInfo.size())
+		if (timeStep >= vecInfo.size())
 			return defaultValue;
 		return vecInfo[timeStep];
 	}
@@ -1445,7 +1445,7 @@ void Simulator::updateOscilloscope(unsigned long timeStep, ItemBase * part) {
 	double voltsDiv[4] ={ch1_volsDiv, ch2_volsDiv, ch3_volsDiv, ch4_volsDiv};
 	double chOffsets[4] ={ch1_offset, ch2_offset, ch3_offset, ch4_offset};
 
-	double screenWidth = 3376.022, screenHeight = 2700.072, bbScreenStrokeWidth= 20;
+	double screenWidth = 3376.022, screenHeight = 2700.072;
 	double verDivisions = 8, horDivisions = 10, divisionSize = screenHeight/verDivisions;
 	double bbScreenOffsetX = 290.544, bbScreenOffsetY = 259.061, schScreenOffsetX = 906.07449, schScreenOffsetY = 354.60801;
 	QString svgHeader = "<?xml version='1.0' encoding='UTF-8' standalone='no'?>\n%5"

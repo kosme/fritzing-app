@@ -107,7 +107,7 @@ bool SvgFileSplitter::splitString(QString & contents, const QString & elementID)
 		QString viewBoxString = root.attribute("viewBox");
 		QRectF viewBox;
 
-		bool ok = TextUtils::extractViewBox(viewBoxString, viewBox);
+		TextUtils::extractViewBox(viewBoxString, viewBox);
 
 		if (viewBox.topLeft().x() != 0 || viewBox.topLeft().y() != 0) {
 			superTransforms.append(QString("translate(%1,%2)").arg(-viewBox.topLeft().x()).arg(-viewBox.topLeft().y()));

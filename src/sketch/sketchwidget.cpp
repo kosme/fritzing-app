@@ -1945,11 +1945,6 @@ void SketchWidget::dragMoveHighlightConnector(QPoint eventPos) {
 	if (m_alignToGrid && (m_alignmentItem)) {
 		QPointF l =  m_alignmentItem->getViewGeometry().loc();
 		alignLoc(loc, m_alignmentStartPoint, loc, l);
-
-		//QPointF q = m_alignmentItem->pos();
-		//if (q != l) {
-		//	DebugDialog::debug(QString("m alignment %1 %2, %3 %4").arg(q.x()).arg(q.y()).arg(l.x()).arg(l.y()));
-		//}
 	}
 
 	m_droppingItem->setItemPos(loc);
@@ -7732,6 +7727,7 @@ void SketchWidget::drawBackground( QPainter * painter, const QRectF & rect )
 }
 
 void SketchWidget::drawForeground ( QPainter * painter, const QRectF & rect ) {
+	(void)(rect);
     if(!m_simMessage.isEmpty()) {
         //Set the font size based on the zoom
         QFont font = painter->font();
@@ -7739,7 +7735,6 @@ void SketchWidget::drawForeground ( QPainter * painter, const QRectF & rect ) {
         font.setPointSizeF(baseFontSize);
         painter->setFont(font);
 
-        int margin = 0; // Margin from the top and right edges
         QFontMetrics metrics = painter->fontMetrics();
         int textWidth = metrics.horizontalAdvance(m_simMessage);
 
