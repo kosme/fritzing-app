@@ -932,14 +932,12 @@ bool GerberGenerator::dealWithMultipleContours(QDomElement & root, bool displayM
 		if (originalPath.contains(MultipleZs)) {
 			QStringList subpaths = path.attribute("d").split("z", Qt::SkipEmptyParts, Qt::CaseInsensitive);
 			QRegularExpressionMatch match;
-			subpaths.at(0).trimmed().indexOf(MFinder, 0, &match);
 			QString priorM = match.captured(1) + match.captured(2) + "," + match.captured(3) + " ";
 			for (int i = 1; i < subpaths.count(); i++) {
 				QDomElement newPath = path.cloneNode(true).toElement();
 				QString z = ((i < subpaths.count() - 1) || originalPath.endsWith("z", Qt::CaseInsensitive)) ? "z" : "";
 				QString d = subpaths.at(i).trimmed() + z;
 				match = QRegularExpressionMatch();
-				d.indexOf(MFinder, 0, &match);
 				if (d.startsWith("m", Qt::CaseSensitive)) {
 					d = priorM + d;
 				}
@@ -1047,7 +1045,6 @@ void GerberGenerator::exportPickAndPlace(const QString & prefix, const QString &
 	}
 	stream << "\n";
 
-	int ix = 1;
 	Q_FOREACH (ItemBase * itemBase, itemBases) {
 		if (!itemBase->hasConnectors()) {
 			// Skip items like logos, images, ...

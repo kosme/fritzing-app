@@ -65,6 +65,7 @@ public:
 	}
 
 	virtual bool begin(QPaintDevice *pdev) {
+		(void)(pdev);
 		return true;
 	}
 
@@ -73,11 +74,13 @@ public:
 	}
 
 	virtual void updateState(const QPaintEngineState &state) {
-
+		(void)(state);
 	}
 
 	virtual void drawPixmap(const QRectF &r, const QPixmap &pm, const QRectF &sr) {
-
+		(void)(r);
+		(void)(pm);
+		(void)(sr);
 	}
 
 	virtual void drawPath(const QPainterPath &path) override;
