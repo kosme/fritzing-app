@@ -64,30 +64,23 @@ public:
 			& ~QPaintEngine::PorterDuff)), clipperPaths() {
 	}
 
-	virtual bool begin(QPaintDevice *pdev) {
-		(void)(pdev);
+	virtual bool begin(QPaintDevice */*pdev*/) override { 
+		return true; 
+	}
+
+	virtual bool end() override {
 		return true;
 	}
 
-	virtual bool end() {
-		return true;
-	}
+	virtual void updateState(const QPaintEngineState &/*state*/) override { }
 
-	virtual void updateState(const QPaintEngineState &state) {
-		(void)(state);
-	}
-
-	virtual void drawPixmap(const QRectF &r, const QPixmap &pm, const QRectF &sr) {
-		(void)(r);
-		(void)(pm);
-		(void)(sr);
-	}
+	virtual void drawPixmap(const QRectF &/*r*/, const QPixmap &/*pm*/, const QRectF &/*sr*/) override {}
 
 	virtual void drawPath(const QPainterPath &path) override;
 
 	virtual void drawPolygon(const QPointF *points, int pointCount, PolygonDrawMode mode) override;
 
-	virtual QPaintEngine::Type type() const {
+	virtual QPaintEngine::Type type() const override {
 		return User;
 	}
 

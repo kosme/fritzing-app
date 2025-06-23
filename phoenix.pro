@@ -36,6 +36,8 @@ unix:!macx {
 
 load(configure)
 
+DEFINES += QT_USE_QSTRINGBUILDER
+
 win32 {
 # release build using msvc 2010 needs to use Multi-threaded (/MT) for the code generation/runtime library option
 # release build using msvc 2010 needs to add msvcrt.lib;%(IgnoreSpecificDefaultLibraries) to the linker/no default libraries option
@@ -163,11 +165,7 @@ macx {
     QMAKE_BUNDLE_DATA += FILE_ICONS
 }
 
-QT += concurrent core gui network printsupport serialport sql svg widgets xml
-
-equals(QT_MAJOR_VERSION, 6) {
-  QT += core5compat svgwidgets openglwidgets
-}
+QT += concurrent core gui network printsupport serialport sql svg widgets xml svgwidgets openglwidgets
 
 RC_FILE = fritzing.rc
 RESOURCES += phoenixresources.qrc

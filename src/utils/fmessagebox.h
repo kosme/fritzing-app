@@ -25,6 +25,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QMessageBox>
 #include <QPushButton>
 #include "qdialogbuttonbox.h"
+#include "qt_features.h"
 
 /**
 	\class FMessageBox
@@ -67,7 +68,7 @@ public:
 	/**
 		Constructs a message box with the given \a parent.
 	*/
-	explicit FMessageBox(QWidget *parent = nullptr);
+	explicit FMessageBox(QWidget *parent);
 
 	/**
 		\reimp
@@ -165,6 +166,7 @@ protected:
 		Stores all logged messages.
 	*/
 	static QList<QPair<QString, QString>> messageLog;
+	static const int MaxLogEntries = 1000;
 
 private:
 	QPushButton *m_copyButton;
