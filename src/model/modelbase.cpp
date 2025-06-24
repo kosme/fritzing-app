@@ -895,12 +895,24 @@ ModelPart * ModelBase::createOldSchematicPartAux(ModelPart * modelPart, const QS
 	}
 	QDomDocument oldDoc;
 	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = oldDoc.setContent(&newFzp);
+	if (!parseResult.operator bool()) {						 
+	#else
 	QString msg;
 	int line;
 	int column;
-	if (!oldDoc.setContent(&newFzp, &msg, &line, &column)){
+	if (!oldDoc.setContent(&newFzp, &msg, &line, &column)) {
+	#endif
 		QString logMessage = QString("Parse Error: %1 at line %2, column %3 in %4")
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage)
+		.arg(parseResult.errorLine)
+		.arg(parseResult.errorColumn)
+		.arg(path);
+	#else
 		.arg(msg).arg(line).arg(column).arg(path);
+	#endif
 		DebugDialog::debug(logMessage);
 		return nullptr;
 	}
