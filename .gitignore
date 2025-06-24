@@ -29,6 +29,7 @@ phoenix.pro.user
 *.so
 *.suo
 *.pdb
+ui_*.h
 
 # Temporary files
 *.py~
@@ -64,3 +65,12 @@ saved_state
 *.qm
 index
 /.qtc_clangd/compile_commands.json
+.vscode/settings.json
+config.tests/
+*.log
+
+# Otput files #
+###############
+Fritzing
+outmess
+output

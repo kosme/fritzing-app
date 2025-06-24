@@ -1,7 +1,7 @@
 #ifndef FLOADERROR_H
 #define FLOADERROR_H
 
-#include "../utils/qt_features.h"
+#include "../qt_features.h"
 #include <QObject>
 #include <QFile>
 

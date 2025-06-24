@@ -25,7 +25,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QMessageBox>
 #include <QPushButton>
 #include "qdialogbuttonbox.h"
-#include "qt_features.h"
+#include "../qt_features.h"
 
 /**
 	\class FMessageBox

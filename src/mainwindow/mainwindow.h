@@ -48,7 +48,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../routingstatus.h"
 #include "../simulation/simulator.h"
 #include "../svg/svg2gerber.h"
-#include "../utils/qt_features.h"
+#include "../qt_features.h"
 #include "../viewlayer.h"
 #include "fritzingwindow.h"
 #include "getspice.h"
