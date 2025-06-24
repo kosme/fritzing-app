@@ -1208,10 +1208,7 @@ QVariant ItemBase::itemChange(QGraphicsItem::GraphicsItemChange change, const QV
 		if (m_partLabel) {
 			m_partLabel->ownerSelected(value.toBool());
 		}
-	}
-
-	else {
-	//if (change == QGraphicsItem::ItemSceneChange) {
+	} else if (change == QGraphicsItem::ItemSceneChange) {
 		QGraphicsScene* oldScene = scene();
 		QGraphicsScene* newScene = qvariant_cast<QGraphicsScene*>(value);
 
@@ -1227,6 +1224,8 @@ QVariant ItemBase::itemChange(QGraphicsItem::GraphicsItemChange change, const QV
 				}
 			}
 		}
+	} else {
+
 	}
 
 	return QGraphicsSvgItem::itemChange(change, value);
