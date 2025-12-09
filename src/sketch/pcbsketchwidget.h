@@ -23,6 +23,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "sketchwidget.h"
 #include "../dialogs/quotedialog.h"
+#include "utils/fmessagebox.h"
 #include <QVector>
 #include <QNetworkReply>
 #include <QDialog>
@@ -89,7 +90,7 @@ public:
 	virtual double getAutorouterTraceWidth();
 	void getBendpointWidths(class Wire *, double w, double & w1, double & w2, bool & negativeOffsetRect);
 	double getSmallerTraceWidth(double minDim);
-	bool groundFill(bool fillGroundTraces, ViewLayer::ViewLayerID, QUndoCommand * parentCommand);
+	QPair<bool, FMessageBox*> groundFill(bool fillGroundTraces, ViewLayer::ViewLayerID, QUndoCommand * parentCommand);
 	bool groundFillOld(bool fillGroundTraces, ViewLayer::ViewLayerID, QUndoCommand * parentCommand);
 	void setGroundFillSeeds();
 	void clearGroundFillSeeds();
@@ -168,7 +169,7 @@ protected:
 	ViewLayer::ViewLayerPlacement createWireViewLayerPlacement(ConnectorItem * from, ConnectorItem * to);
 	Wire * createTempWireForDragging(Wire * fromWire, ModelPart * wireModel, ConnectorItem * connectorItem, ViewGeometry & viewGeometry, ViewLayer::ViewLayerPlacement);
 	void prereleaseTempWireForDragging(Wire*);
-	void rotatePartLabels(double degrees, QTransform &, QPointF center, QUndoCommand * parentCommand);
+	void rotatePartLabels(const double* degreesPtr, QPointF center, QUndoCommand * parentCommand);
 	bool hasNeighbor(ConnectorItem * connectorItem, ViewLayer::ViewLayerID viewLayerID, const QRectF & r);
 	bool canConnectSeed(QRectF boardRect,
 					 QImage * copperImage,

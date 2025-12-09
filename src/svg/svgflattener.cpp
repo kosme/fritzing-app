@@ -58,7 +58,8 @@ void SvgFlattener::applyAttributes(QDomElement &element, QTransform transform, c
 		// Expected, sometimes there is no stroke-width
 	}
 
-	for (const QString attr : {"fill", "stroke"}) {
+	static const QStringList attrs = {"fill", "stroke"};
+	for (const QString& attr : attrs) {
 		try {
 			QString value(attributes.at(attr));
 			if (!value.isEmpty()) {
@@ -73,12 +74,14 @@ void SvgFlattener::applyAttributes(QDomElement &element, QTransform transform, c
 void SvgFlattener::flattenChildren(QDomElement &element, const SvgAttributesMap & inherited_attributes) {
 	const SvgAttributesMap attributes = mergeSvgAttributes(inherited_attributes, element);
 
-	// recurse the children
-	QDomNodeList childList = element.childNodes();
-
-	for(int i = 0; i < childList.length(); i++) {
-		QDomElement child = childList.item(i).toElement();
-		flattenChildren(child, attributes);
+	QDomNode child = element.firstChild();
+	while (!child.isNull()) {
+		QDomElement childElement = child.toElement();
+		QDomNode nextChild = child.nextSibling(); // Get next before recursion
+		if (!childElement.isNull()) {
+			flattenChildren(childElement, attributes);
+		}
+		child = nextChild;
 	}
 
 	bool didOtherTransform = false;

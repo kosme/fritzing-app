@@ -46,6 +46,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../sketch/breadboardsketchwidget.h"
 #include "../sketch/schematicsketchwidget.h"
 #include "../sketch/pcbsketchwidget.h"
+#include "../sketch/sketchwidget.h"
 #include "../partsbinpalette/binmanager/binmanager.h"
 #include "../utils/expandinglabel.h"
 #include "../infoview/htmlinfoview.h"
@@ -181,6 +182,12 @@ void MainWindow::mainLoad() {
 					   );
 
 	if (fileName.isEmpty()) return;
+
+	if (fileName.endsWith(FritzingSketchExtension) || fileName.endsWith(FritzingBundleExtension)) {
+		if (!FolderUtils::checkFileLoadability(this, fileName)) {
+			return;
+		}
+	}
 
 	if (fileName.endsWith(FritzingBundledPartExtension)) {
 		m_binManager->importPartToMineBin(fileName);
@@ -2003,8 +2010,7 @@ void MainWindow::updatePartMenu() {
 	m_convertToBendpointAct->setVisible(ctbpVisible);
 	m_convertToBendpointSeparator->setVisible(ctbpVisible);
 
-	// TODO: only enable if there is an obsolete part in the sketch
-	m_selectAllObsoleteAct->setEnabled(true);
+	m_selectAllObsoleteAct->setEnabled(itemCount.obsoleteCount > 0);
 	m_swapObsoleteAct->setEnabled(itemCount.obsoleteCount > 0);
 
 	m_findPartInSketchAct->setEnabled(m_currentGraphicsView);
@@ -2476,6 +2482,17 @@ void MainWindow::toggleUndoHistory(bool toggle) {
 	}
 }
 
+void MainWindow::showUndoHistory() {
+	if (m_undoView && m_undoView->parent()) {
+		QDockWidget* dockWidget = qobject_cast<QDockWidget*>(m_undoView->parent());
+		if (dockWidget && !dockWidget->isVisible()) {
+			dockWidget->show();
+			dockWidget->raise();
+			DebugDialog::debug("Automatically showed undo history widget");
+		}
+	}
+}
+
 void MainWindow::toggleDebuggerOutput(bool toggle) {
 	if (toggle) {
 		DebugDialog::showDebug();
@@ -2555,31 +2572,26 @@ void MainWindow::rotateIncCCWRubberBand() {
 
 void MainWindow::rotate90cw() {
 	if (m_currentGraphicsView == nullptr) return;
-
 	m_currentGraphicsView->rotateX(90, false, nullptr);
 }
 
 void MainWindow::rotate90ccw() {
 	if (m_currentGraphicsView == nullptr) return;
-
-	m_currentGraphicsView->rotateX(270, false, nullptr);
+	m_currentGraphicsView->rotateX(-90, false, nullptr);
 }
 
 void MainWindow::rotate45ccw() {
 	if (m_currentGraphicsView == nullptr) return;
-
-	m_currentGraphicsView->rotateX(315, false, nullptr);
+	m_currentGraphicsView->rotateX(-45, false, nullptr);
 }
 
 void MainWindow::rotate45cw() {
 	if (m_currentGraphicsView == nullptr) return;
-
 	m_currentGraphicsView->rotateX(45, false, nullptr);
 }
 
 void MainWindow::rotate180() {
 	if (m_currentGraphicsView == nullptr) return;
-
 	m_currentGraphicsView->rotateX(180, false, nullptr);
 }
 
@@ -3302,7 +3314,9 @@ void MainWindow::groundFillAux(bool fillGroundTraces, ViewLayer::ViewLayerID vie
 	auto * parentCommand = new QUndoCommand(fillGroundTraces ? tr("Ground Fill") : tr("Copper Fill"));
 	m_pcbGraphicsView->blockUI(true);
 	removeGroundFill(viewLayerID, parentCommand);
-	bool success = m_pcbGraphicsView->groundFill(fillGroundTraces, viewLayerID, parentCommand);
+	QPair<bool, FMessageBox*> result = m_pcbGraphicsView->groundFill(fillGroundTraces, viewLayerID, parentCommand);
+	bool success = result.first;
+	FMessageBox* msgBox = result.second;
 
 	if (success) {
 		m_undoStack->push(parentCommand);
@@ -3311,6 +3325,12 @@ void MainWindow::groundFillAux(bool fillGroundTraces, ViewLayer::ViewLayerID vie
 		delete parentCommand;
 	}
 	m_pcbGraphicsView->blockUI(false);
+
+	// Show message after rendering is complete
+	if (msgBox != nullptr) {
+		msgBox->exec();
+		delete msgBox;
+	}
 }
 
 void MainWindow::removeGroundFill() {
@@ -3496,6 +3516,7 @@ QMenu *MainWindow::schematicWireMenu() {
 	menu->addAction(m_deleteWireMinusAct);
 	menu->addSeparator();
 	menu->addAction(m_addBendpointAct);
+	menu->addAction(m_flattenCurveAct);
 #ifndef QT_NO_DEBUG
 	menu->addSeparator();
 	menu->addAction(m_infoViewOnHoverAction);
@@ -4456,16 +4477,12 @@ void MainWindow::orderFab()
 
 			// If the checkbox is checked, don't show the message box
 			if (!notAgain->isChecked()) {
-				QObject::connect(notAgain, &QCheckBox::stateChanged, [&cancelButton](int state){
-				    cancelButton->setEnabled(state == Qt::Unchecked);
-				});
-
 				int ret = box.exec();
 
-				// Save the setting
-				settings.setValue(notShowAgain, notAgain->isChecked());
-
-				if (ret != QMessageBox::Ok) {
+				// Only save the setting if OK was pressed, not Cancel
+				if (ret == QMessageBox::Ok) {
+					settings.setValue(notShowAgain, notAgain->isChecked());
+				} else {
 				    return;
 				}
 			}

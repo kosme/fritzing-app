@@ -127,20 +127,20 @@ QString Dip::genModuleID(QMap<QString, QString> & currPropsMap)
 	}
 }
 
-QString Dip::retrieveSchematicSvg(QString & svg, bool & normalized) {
+QString Dip::retrieveSchematicSvg(const QString & svg) {
 	bool hasLocal = false;
 	QStringList labels = getPinLabels(hasLocal);
 
+	QString newSvg;
 	if (this->isDIP()) {
-		svg = makeSchematicSvg(labels);
-		//DebugDialog::debug("make dip " + svg);
+		newSvg = makeSchematicSvg(labels);
+		//DebugDialog::debug("make dip " + newSvg);
 	}
 	else {
-		svg = MysteryPart::makeSchematicSvg(labels, true);
+		newSvg = MysteryPart::makeSchematicSvg(labels, true);
 	}
-	normalized = false;
 
-	return TextUtils::replaceTextElement(svg, "label", m_chipLabel);
+	return TextUtils::replaceTextElement(newSvg, "label", m_chipLabel);
 }
 
 QString Dip::makeSchematicSvg(const QString & expectedFileName)
@@ -399,21 +399,10 @@ bool Dip::changePinLabels(bool sip) {
 	QStringList labels = getPinLabels(hasLocal);
 	if (labels.count() == 0) return true;
 
-	bool singleRow = isSingleRow(cachedConnectorItems());
+	QTransform transform = untransform();
+
 	QString svg;
-	if (singleRow) {
-		svg = MysteryPart::makeSchematicSvg(labels, sip);
-	}
-	else {
-		svg = Dip::makeSchematicSvg(labels);
-	}
-
-	QString chipLabel = modelPart()->localProp("chip label").toString();
-	if (!chipLabel.isEmpty()) {
-		svg =TextUtils::replaceTextElement(svg, "label", chipLabel);
-	}
-
-	QTransform  transform = untransform();
+	svg = retrieveSchematicSvg(svg);
 
 	resetLayerKin(svg);
 	resetConnectors();

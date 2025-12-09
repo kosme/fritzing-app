@@ -1628,7 +1628,9 @@ QString MainWindow::exportIPC_D_356A() {
 
 	QString basename = QFileInfo(m_fwFilename).fileName();
 
-	ViewGeometry::WireFlags skipFlags = ViewGeometry::NoFlag;
+	ViewGeometry::WireFlags skipFlags = ViewGeometry::NormalFlag |        // Skip breadboard connections
+	                                    ViewGeometry::SchematicTraceFlag | // Skip schematic connections
+	                                    ViewGeometry::RatsnestFlag;        // Skip ratsnest connections
 	const bool skipBuses = true;
 
 	QHash<ConnectorItem *, int> indexer;
@@ -1679,7 +1681,7 @@ void MainWindow::exportNetlist() {
 	QDomElement netlist = doc.createElement("netlist");
 	doc.appendChild(netlist);
 	netlist.setAttribute("sketch", QFileInfo(m_fwFilename).fileName());
-	netlist.setAttribute("date", QDateTime::currentDateTime().toString());
+	netlist.setAttribute("date", QDateTime::currentDateTime().toString(Qt::ISODate));
 
 	// TODO: filter out 'ignore' connectors
 

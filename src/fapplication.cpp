@@ -380,7 +380,7 @@ int FApplication::init() {
 
 	m_serviceType = ServiceType::NoService;
 
-	bool useOpenGL = false;
+	bool useOpenGL = true;
 	bool showFPS = false;
 
 	QList<int> toRemove;
@@ -423,6 +423,8 @@ int FApplication::init() {
 			}
 		}
 
+		// This enables the FTesting server. Caution: The FTesting server
+		// does not attempt to be secure. Only use this option in an isolated network.
 		if ((m_arguments[i].compare("-ftesting", Qt::CaseInsensitive) == 0) ||
 			(m_arguments[i].compare("--ftesting", Qt::CaseInsensitive) == 0)) {
 			DebugDialog::setEnabled(true);
@@ -431,9 +433,9 @@ int FApplication::init() {
 			toRemove << i;
 		}
 
-		if (m_arguments[i].compare("--opengl", Qt::CaseInsensitive) == 0) {
-			useOpenGL = true;
-			DebugDialog::debug("OpenGL rendering enabled via --opengl");
+		if (m_arguments[i].compare("--noopengl", Qt::CaseInsensitive) == 0) {
+			useOpenGL = false;
+			DebugDialog::debug("OpenGL rendering disabled via --noopengl");
 			toRemove << i;
 			continue;
 		}
@@ -631,7 +633,7 @@ int FApplication::init() {
 				   .arg(locale.decimalPoint()));
 	}
 
-	DebugDialog::debug(QString("OpenGL requested: %1").arg(useOpenGL ? "Yes" : "No"));
+	DebugDialog::debug(QString("OpenGL enabled: %1").arg(useOpenGL ? "Yes" : "No"));
 	DebugDialog::debug(QString("FPS Monitor requested: %1").arg(showFPS ? "Yes" : "No"));
 	settings.setValue("Rendering/OpenGL", useOpenGL);
 	settings.setValue("Rendering/FPS", showFPS);
@@ -1374,7 +1376,10 @@ int FApplication::startup()
 
 		if (prevVersion != currVersion) {
 			// Settings to preserve during clear
-			const QStringList preserveKeys = {"pid", "language", "locale", "fps", "opengl"};
+			QStringList preserveKeys = {"pid", "language", "locale", "fps", "opengl"};
+			if (FTesting::getInstance()->enabled()) {
+				preserveKeys.append("gerberExportImprovementsEnabled");
+			}
 
 			// Store values we want to keep
 			QMap<QString, QVariant> preserveValues;
@@ -2271,6 +2276,8 @@ void FApplication::regenerateDatabaseFinished() {
 	}
 
 	thread->deleteLater();
+
+	FMessageBox::BlockMessages = false;
 }
 
 void FApplication::installNewParts() {

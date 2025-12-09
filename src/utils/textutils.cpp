@@ -24,10 +24,13 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QTextStream>
 
 #include "textutils.h"
+#include "textmetrics.h"
 #include "misc.h"
 #include "../installedfonts.h"
 
 #include <QRegularExpression>
+#include <QFont>
+#include <QFontMetrics>
 #include <QRegularExpression>
 #include <QBuffer>
 #include <QFile>
@@ -149,9 +152,8 @@ bool fixUnavailableFontFamilies(QString &fileContent, const QString & destFont) 
 	definedFFs.unite(getFontFamiliesInsideStyleTag(fileContent));
 
 	FixedFontsHash fixedFonts = fixFontsMapping(definedFFs, destFont);
-	Q_FOREACH(QString oldF, fixedFonts.keys()) {
-		QString newF = fixedFonts[oldF];
-		fileContent.replace(oldF,newF);
+	for (auto it = fixedFonts.begin(); it != fixedFonts.end(); ++it) {
+		fileContent.replace(it.key(), it.value());
 	}
 
 	return !fixedFonts.empty();
@@ -402,10 +404,10 @@ QString TextUtils::replaceTextElements(const QString & svg, const QHash<QString,
 	for (int i = 0; i < domNodeList.count(); i++) {
 		QDomElement node = domNodeList.item(i).toElement();
 		if (node.isNull()) continue;
-		Q_FOREACH (QString id, hash.keys()) {
-			if (node.attribute("id").compare(id) != 0) continue;
+		for (auto it = hash.begin(); it != hash.end(); ++it) {
+			if (node.attribute("id").compare(it.key()) != 0) continue;
 
-			replaceChildText(node, hash.value(id));
+			replaceChildText(node, it.value());
 			changed = true;
 			break;
 		}
@@ -981,23 +983,18 @@ QList<double> TextUtils::getTransformFloats(QDomElement & element) {
 
 QList<double> TextUtils::getTransformFloats(const QString & transform) {
 	QList<double> list;
-	int pos = 0;
-
-	QRegularExpressionMatch match;
-	while ((pos = transform.indexOf(TextUtils::floatingPointMatcher, pos, &match)) != -1) {
-		list << transform.mid(pos, match.capturedLength()).toDouble();
-		pos += match.capturedLength();
-		match = QRegularExpressionMatch();
+	
+	// Split on any sequence of non-numeric characters (except +, -, ., e, E)
+	static const QRegularExpression separator("[^-+0-9.eE]+");
+	QStringList parts = transform.split(separator, Qt::SkipEmptyParts);
+	
+	for (const QString &part : std::as_const(parts)) {
+		bool ok;
+		double value = part.toDouble(&ok);
+		if (ok) {
+			list << value;
+		}
 	}
-
-#ifndef QT_NO_DEBUG
-	// QString dbg = "got transform params: \n";
-	//dbg += transform + "\n";
-	//for(int i=0; i < list.size(); i++){
-	//dbg += QString::number(list.at(i)) + " ";
-	// }
-	//DebugDialog::debug(dbg);
-#endif
 
 	return list;
 }
@@ -1005,8 +1002,8 @@ QList<double> TextUtils::getTransformFloats(const QString & transform) {
 void TextUtils::gWrap(QDomDocument & domDocument, const QHash<QString, QString> & attributes)
 {
 	QDomElement g = domDocument.createElement("g");
-	Q_FOREACH (QString key, attributes.keys()) {
-		g.setAttribute(key, attributes.value(key, ""));
+	for (auto it = attributes.begin(); it != attributes.end(); ++it) {
+		g.setAttribute(it.key(), it.value());
 	}
 
 	QDomNodeList nodeList = domDocument.documentElement().childNodes();
@@ -1134,7 +1131,8 @@ bool TextUtils::fixViewBox(QDomElement & root) {
 	QString viewBox = root.attribute("viewBox");
 	if (viewBox.isEmpty()) return false;
 
-	QStringList coords = viewBox.split(QRegularExpression(" |,"));
+	static const QRegularExpression coordSeparator(" |,");
+	QStringList coords = viewBox.split(coordSeparator);
 	if (coords.length() != 4) return false;
 
 	if (coords[0] == "0" && coords[1] == "0") return false;
@@ -1265,41 +1263,283 @@ bool TextUtils::noPatternAux(QDomDocument & svgDom, const QString & tag)
 }
 
 
+#ifdef QT_DEBUG
+void TextUtils::addDebugAnchorPoint(QDomDocument & svgDom, QDomElement & parent, double x, double y, double fontSize) {
+	QDomElement debugGroup = svgDom.createElement("g");
+	debugGroup.setAttribute("fill", "none");
+	debugGroup.setAttribute("stroke", "green");
+	debugGroup.setAttribute("stroke-linecap", "round");
+	debugGroup.setAttribute("stroke-linejoin", "round");
+	QString linewidth = QString::number(fontSize / 17);
+	double cross_r = fontSize / 5;
+	debugGroup.setAttribute("stroke-width", linewidth);
+	
+	// Vertical line
+	QDomElement verticalLine = svgDom.createElement("line");
+	verticalLine.setAttribute("x1", QString::number(x));
+	verticalLine.setAttribute("x2", QString::number(x));
+	verticalLine.setAttribute("y1", QString::number(y - cross_r));
+	verticalLine.setAttribute("y2", QString::number(y + cross_r));
+	debugGroup.appendChild(verticalLine);
+	
+	// Horizontal line
+	QDomElement horizontalLine = svgDom.createElement("line");
+	horizontalLine.setAttribute("x1", QString::number(x - cross_r));
+	horizontalLine.setAttribute("x2", QString::number(x + cross_r));
+	horizontalLine.setAttribute("y1", QString::number(y));
+	horizontalLine.setAttribute("y2", QString::number(y));
+	debugGroup.appendChild(horizontalLine);
+	
+	parent.appendChild(debugGroup);
+}
+#endif
+
+void TextUtils::applyAnchorTransform(const QList<QDomElement> & anchorElements, const QString & textAnchor, double anchorBaseX, double minX, double maxX) {
+	double totalWidth = maxX - minX;
+	double anchorOffset = anchorBaseX;
+	if (textAnchor == "middle") {
+		anchorOffset = anchorBaseX - totalWidth / 2.0;
+	} else if (textAnchor == "end") {
+		anchorOffset = anchorBaseX - totalWidth;
+	} else if (textAnchor == "start" || textAnchor.isEmpty()) {
+		// No adjustment needed for start or empty (default is start)
+	}
+
+	// Apply translation to each element
+	for (const QDomElement & element : anchorElements) {
+		QDomElement elem = const_cast<QDomElement&>(element);
+		
+		// Check if element has rotate or transform attributes
+		bool hasRotate = !elem.attribute("rotate").isEmpty();
+		bool hasTransform = !elem.attribute("transform").isEmpty();
+		if (hasRotate || hasTransform) {
+			// Use matrix transform for elements with rotate or existing transform
+			QTransform existingTransform = elementToTransform(elem);
+			QTransform anchorTransform;
+			anchorTransform.translate(anchorOffset, 0);
+			// Chain the transforms: apply existing transform first, then anchor offset
+			QTransform combinedTransform = existingTransform * anchorTransform;
+			elem.setAttribute("transform", svgMatrix(combinedTransform));
+		} else {
+			// Use x attribute modification for simple cases
+			QString xAttr = elem.attribute("x");
+			double currentX = 0.0;
+			if (!xAttr.isEmpty()) {
+				bool ok;
+				currentX = xAttr.toDouble(&ok);
+				if (!ok) {
+					currentX = 0.0;
+				}
+			}
+			elem.setAttribute("x", QString::number(currentX + anchorOffset));
+		}
+	}
+}
+
 bool TextUtils::tspanRemoveAux(QDomDocument & svgDom)
 {
-	QList<QDomElement> texts;
+	// We flatten tspans into groups of text
+	// Known limitations (too lazy, no one needs this) :
+	// - tspan nested in tspans are not supported
+	// - rotate attribute always applies to the complete tspan (standard rotates individual letters)
+	// - rotate attribute is not compatible with data-fritzing-multiline rotation
+	// - no textPath support	
 	QDomNodeList textNodeList = svgDom.elementsByTagName("text");
 	for (int i = 0; i < textNodeList.count(); i++) {
 		QDomElement text = textNodeList.item(i).toElement();
+		QString xAttr = text.attribute("x");
+		QString yAttr = text.attribute("y");
+		QString dxAttr = text.attribute("dx");
+		QString dyAttr = text.attribute("dy");
+		double baseX = 0.0;
+		double baseY = 0.0;
+		// Parse coordinates using font metrics to handle em/ex units
+		TextMetrics tm(text);
+		if (!xAttr.isEmpty())
+			baseX = tm.parseCoordinate(xAttr);
+		if (!yAttr.isEmpty())
+			baseY = tm.parseCoordinate(yAttr);
+		if (!dxAttr.isEmpty())
+			baseX += tm.parseCoordinate(dxAttr);
+		if (!dyAttr.isEmpty())
+			baseY += tm.parseCoordinate(dyAttr);
+
+		text.removeAttribute("dx");
+		text.removeAttribute("dy");
+		if (qFuzzyIsNull(baseX)) {
+			text.removeAttribute("x");
+		} else {
+			text.setAttribute("x", QString::number(baseX));
+		}
+		if (qFuzzyIsNull(baseY)) {
+			text.removeAttribute("y");
+		} else {
+			text.setAttribute("y", QString::number(baseY));
+		}
+
 		QDomElement tspan = text.firstChildElement("tspan");
-		if (tspan.isNull()) continue;
+		if (tspan.isNull()) {
+			continue;
+		}
 
-		texts.append(text);
-	}
-
-	if (texts.count() == 0) return false;
-
-	Q_FOREACH (QDomElement text, texts) {
 		QDomElement g = svgDom.createElement("g");
 		text.parentNode().replaceChild(g, text);
 		QDomNamedNodeMap attributes = text.attributes();
-		for (int i = 0; i < attributes.count(); i++) {
+		
+		QString textAnchor = findAnchor(text);
+			for (int i = 0; i < attributes.count(); i++) {
 			QDomNode attribute = attributes.item(i);
 			g.setAttribute(attribute.nodeName(), attribute.nodeValue());
 		}
-		QString defaultX = g.attribute("x");
-		QString defaultY = g.attribute("y");
-		g.removeAttribute("x");
-		g.removeAttribute("y");
+		g.removeAttribute("text-anchor"); // Remove text-anchor from group, we'll handle it manually
 
-		copyText(svgDom, g, text, defaultX, defaultY, false);
+#ifdef QT_DEBUG
+		QString fsAttr = g.attribute("font-size"); // Only used for drawing debug artefacts
+		double dbgfs = 10;
+		if (!fsAttr.isEmpty())
+			dbgfs = fsAttr.toDouble();
+#endif
 
-		QDomElement tspan = text.firstChildElement("tspan");
-		while (!tspan.isNull()) {
-			copyText(svgDom, g, tspan, defaultX, defaultY, true);
-			tspan = tspan.nextSiblingElement("tspan");
+		// Process all children (text nodes and tspans) in order
+		double currentX = baseX;
+		double currentY = baseY;
+			double minX = baseX;
+		double maxX = baseX;
+			bool resetAnchorOffset = false;
+		
+		// Track elements in current anchor group
+		QList<QDomElement> anchorElements;
+
+		// Process all children (text nodes and tspan elements) in document order
+		QDomNode child = text.firstChild();
+
+		double width = 0.0;
+		QString textContent;
+		TextMetrics *recenttmptr = &tm;
+		TextMetrics tspanTm;
+		while (!child.isNull()) {
+			QDomElement elementToAppend;
+			QString newTextContent;
+			if (child.isText()) {				
+				// Process direct text node using main text element attributes
+				newTextContent = child.nodeValue();
+
+				if (recenttmptr->equals(tm)) {
+					double advance12 = tm.horizontalAdvance(textContent + newTextContent);
+					double advance = tm.horizontalAdvance(newTextContent);
+					currentX += advance12 - advance;
+				} else {
+					double advance = recenttmptr->horizontalAdvance(textContent);
+					currentX += advance;
+				}
+				textContent = newTextContent;
+					if (!textContent.isEmpty()) {
+					elementToAppend = createTextElement(svgDom, g, textContent, currentX, currentY);
+				}
+
+				width = tm.width(textContent);
+				recenttmptr = &tm;
+				} else if (child.isElement() && child.nodeName() == "tspan") {
+				QDomElement tspan = child.toElement();
+				TextUtils::findText(tspan, newTextContent);
+						tspanTm = tm.derive(tspan);
+
+				bool ok;
+				QString tspanX = tspan.attribute("x");
+				double absX = tspanTm.parseCoordinate(tspanX, &ok);
+				if (ok) {
+					maxX = qMax(maxX, currentX + width);
+					currentX = absX; // Override currentX with tspan's x
+					resetAnchorOffset = true;
+				} else {
+
+					if (recenttmptr->equals(tspanTm)) {
+							double advance12 = tspanTm.horizontalAdvance(textContent + newTextContent);
+						double advance = tspanTm.horizontalAdvance(newTextContent);
+						currentX += advance12 - advance;
+					} else {
+						double advance = recenttmptr->horizontalAdvance(textContent);
+						currentX += advance;
+					}
+				}
+				textContent = newTextContent;
+				QString tspanY = tspan.attribute("y");
+				double absY = tspanTm.parseCoordinate(tspanY, &ok);
+				if (ok) {
+					currentY = absY;  // Override currentY with tspan's y
+				}
+				QString dyValue = tspan.attribute("dy");
+				double dyVal = tspanTm.parseCoordinate(dyValue, &ok);
+				if (ok) {
+					currentY += dyVal;
+				}
+				QString dxValue = tspan.attribute("dx");
+				double dxVal = tspanTm.parseCoordinate(dxValue, &ok);
+				if (ok) {
+					currentX += dxVal;
+				}
+				recenttmptr = &tspanTm;
+
+				elementToAppend = copyText(svgDom, g, tspan, currentX, currentY, true);
+
+				width = tspanTm.width(textContent);
+				}
+
+
+			if (resetAnchorOffset) {
+				// Apply anchor transform to current group elements
+					applyAnchorTransform(anchorElements, textAnchor, 0, minX, maxX);
+
+					minX = currentX;
+				maxX = currentX;
+				resetAnchorOffset = false;
+				
+				// Clear anchor elements list for new group
+				anchorElements.clear();
+				
+#ifdef QT_DEBUG
+				// Visualize the new anchor point
+				addDebugAnchorPoint(svgDom, g, currentX, currentY, dbgfs);
+#endif
+			}
+
+			if (!elementToAppend.isNull()) {
+				anchorElements.append(elementToAppend);
+			}
+
+			child = child.nextSibling();
 		}
-	}
+
+			// Apply text-anchor positioning to the final anchor group
+			maxX = qMax(maxX, currentX + width);
+				applyAnchorTransform(anchorElements, textAnchor, 0, minX, maxX);
+
+		// Adjust main group transform to account for original base position
+		QTransform currentTransform = elementToTransform(g);
+		QTransform finalTransform = currentTransform;
+		
+#ifdef QT_DEBUG
+		// Add debug lines to visualize original anchor point (apply current transform to original base position)
+		QPointF anchorPoint = currentTransform.map(QPointF(baseX, baseY));
+		QDomElement parent = g.parentNode().toElement();
+		addDebugAnchorPoint(svgDom, parent, anchorPoint.x(), anchorPoint.y(), dbgfs);
+#endif
+
+		if (finalTransform.isIdentity()) {
+			g.removeAttribute("transform");
+		} else {
+			QString finalTransformStr = svgMatrix(finalTransform);
+			g.setAttribute("transform", finalTransformStr);
+		}
+
+		if (g.childNodes().size() > 1) {
+			g.setAttribute("data-fritzing-multiline", "");
+		}
+		// Debug: show the generated substitution structure
+		QString xmlString;
+		QTextStream stream(&xmlString);
+		g.save(stream, 0);
+		}
 
 	return true;
 }
@@ -1350,24 +1590,58 @@ bool TextUtils::noUseAux(QDomDocument & svgDom)
 	return true;
 }
 
-
-QDomElement TextUtils::copyText(QDomDocument & svgDom, QDomElement & parent, QDomElement & text, const QString & defaultX, const QString & defaultY, bool copyAttributes)
+QDomElement TextUtils::copyText(QDomDocument & svgDom, QDomElement & parent, QDomElement & text, double defaultX, double defaultY, bool copyAttributes)
 {
 	QDomNode cnode = text.firstChild();
 	while (!cnode.isNull()) {
 		if (cnode.isText()) {
 			QDomElement newText = svgDom.createElement("text");
 			parent.appendChild(newText);
-			newText.setAttribute("x", defaultX);
-			newText.setAttribute("y", defaultY);
+
+			const double epsilon = 1e-9;
+			if (qAbs(defaultX) > epsilon) {
+				newText.setAttribute("x", QString::number(defaultX));
+			}
+			if (qAbs(defaultY) > epsilon) {
+				newText.setAttribute("y", QString::number(defaultY));
+			}
+
 			QDomNode textValue = svgDom.createTextNode(cnode.nodeValue());
 			newText.appendChild(textValue);
 
 			if (copyAttributes) {
 				QDomNamedNodeMap attributes = text.attributes();
+				QString rotateValue;
+				
 				for (int i = 0; i < attributes.count(); i++) {
 					QDomNode attribute = attributes.item(i);
-					newText.setAttribute(attribute.nodeName(), attribute.nodeValue());
+					QString attrName = attribute.nodeName();
+					
+					if (attrName == "rotate") {
+						rotateValue = attribute.nodeValue();
+						continue; // Don't copy rotate attribute directly
+					}
+					
+					// Do not copy x, y, dx, and dy attributes
+					if (attrName != "transform" && attrName != "x" && attrName != "y" && attrName != "dx" && attrName != "dy") {
+						newText.setAttribute(attrName, attribute.nodeValue());
+					}
+				}
+				
+				// Convert rotate attribute to transform matrix if present
+				if (!rotateValue.isEmpty()) {
+					bool ok;
+					double rotateAngle = rotateValue.toDouble(&ok);
+					if (ok) {
+						// Create rotation transform around the text's position (defaultX, defaultY)
+						QTransform rotationTransform;
+						rotationTransform.translate(defaultX, defaultY);
+						rotationTransform.rotate(rotateAngle);
+						rotationTransform.translate(-defaultX, -defaultY);
+						
+						QString transformMatrix = svgMatrix(rotationTransform);
+						newText.setAttribute("transform", transformMatrix);
+						}
 				}
 			}
 
@@ -1380,6 +1654,27 @@ QDomElement TextUtils::copyText(QDomDocument & svgDom, QDomElement & parent, QDo
 
 	return ___emptyElement___;
 }
+
+QDomElement TextUtils::createTextElement(QDomDocument & svgDom, QDomElement & parent, const QString & text, double x, double y)
+{
+	QDomElement newText = svgDom.createElement("text");
+	parent.appendChild(newText);
+	
+	const double epsilon = 1e-9;
+	if (qAbs(x) > epsilon) {
+		newText.setAttribute("x", QString::number(x));
+	}
+	if (qAbs(y) > epsilon) {
+		newText.setAttribute("y", QString::number(y));
+	}
+	
+	QDomNode textValue = svgDom.createTextNode(text);
+	newText.appendChild(textValue);
+	
+	return newText;
+}
+
+
 
 QString TextUtils::slamStrokeAndFill(const QString & svg, const QString & stroke, const QString & strokeWidth, const QString & fill)
 {
@@ -1496,7 +1791,7 @@ QString TextUtils::negIncCopyPinFunction(int pin, const QString & argString, voi
 
 double TextUtils::getViewBoxCoord(const QString & svg, int coord)
 {
-	QRegularExpression re("viewBox=['\\\"]([^'\\\"]+)['\\\"]");
+	static QRegularExpression re("viewBox=['\\\"]([^'\\\"]+)['\\\"]");
 	QRegularExpressionMatch match;
 	int ix = svg.indexOf(re, 0, &match);
 	if (ix < 0) return 0;
@@ -1730,7 +2025,8 @@ int TextUtils::getPinsAndSpacing(const QString & expectedFileName, QString & spa
 
 	spacingString = "100mil";
 	for (++pix; pix < pieces.count(); pix++) {
-		if (pieces.at(pix).indexOf(QRegularExpression("\\d")) == 0) {
+		static const QRegularExpression digitRegex("\\d");
+		if (pieces.at(pix).indexOf(digitRegex) == 0) {
 			spacingString = pieces.at(pix);
 			return pins;
 		}
@@ -1741,7 +2037,8 @@ int TextUtils::getPinsAndSpacing(const QString & expectedFileName, QString & spa
 
 bool TextUtils::extractViewBox(QString viewBoxString, QRectF & viewBox) {
 	bool gotViewBox = false;
-	QStringList vbs = viewBoxString.split(QRegularExpression(",| "));
+	static const QRegularExpression viewBoxSeparator(",| ");
+	QStringList vbs = viewBoxString.split(viewBoxSeparator);
 	if (vbs.count() == 4) {
 		bool ok = false;
 		double d[4];
@@ -2026,7 +2323,8 @@ bool TextUtils::ensureViewBox(QDomDocument doc, double dpi, QRectF & rect, bool 
 		return true;
 	}
 
-	QStringList coords = viewBox.split(QRegularExpression(" |,"));
+	static const QRegularExpression coordSeparator2(" |,");
+	QStringList coords = viewBox.split(coordSeparator2);
 	if (coords.count() != 4) return false;
 
 	rect.setRect(coords.at(0).toDouble(), coords.at(1).toDouble(), coords.at(2).toDouble(), coords.at(3).toDouble());
@@ -2110,3 +2408,9 @@ QLocale TextUtils::getLocale() {
 	}
 	return QLocale();
 }
+
+QFont TextUtils::textMetrics(const QDomElement & element) {
+	TextMetrics tm(element);
+	return tm.getFont();
+}
+

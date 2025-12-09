@@ -275,7 +275,9 @@ void Note::moveItem(ViewGeometry & viewGeometry) {
 	this->setPos(viewGeometry.loc());
 }
 
-void Note::findConnectorsUnder() {
+void Note::findConnectorsUnder(bool enableHoverFeedback, bool allowAlready) {
+	Q_UNUSED(enableHoverFeedback);
+	Q_UNUSED(allowAlready);
 }
 
 void Note::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
@@ -388,7 +390,7 @@ void Note::forceFormat(int position, int charsAdded) {
 	QFont font("Droid Sans", 9, QFont::Normal);
 
 	f.setFont(font);
-	f.setFontFamilies({"Droid Sans"});
+	f.setFontFamilies(QStringList("Droid Sans"));
 	f.setFontPointSize(9);
 
 	int cc = m_graphicsTextItem->document()->characterCount();

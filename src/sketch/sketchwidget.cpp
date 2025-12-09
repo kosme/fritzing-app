@@ -18,8 +18,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 ********************************************************************/
 
-#include <QtCore>
-
 #include <QGraphicsScene>
 #include <QPoint>
 #include <QPair>
@@ -41,6 +39,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QScrollBar>
 #include <QStatusBar>
 #include <QOpenGLWidget>
+#include <QRandomGenerator>
+#include <QMimeData>
 
 #include <limits>
 
@@ -55,7 +55,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../model/modelpart.h"
 #include "../debugdialog.h"
 #include "sketchwidget.h"
-#include "qopenglcontext.h"
+#include "outlierhandler.h"
 #include "subpartswapmanager.h"
 #include "../connectors/connectoritem.h"
 #include "../connectors/svgidlayer.h"
@@ -80,7 +80,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../items/moduleidnames.h"
 #include "../items/hole.h"
 #include "../items/capacitor.h"
-#include "../items/schematicframe.h"
 #include "../utils/graphutils.h"
 #include "../utils/ratsnestcolors.h"
 #include "../utils/fmessagebox.h"
@@ -184,6 +183,9 @@ SketchWidget::SketchWidget(ViewLayer::ViewID viewID, QWidget *parent, int size, 
 	//setTransformationAnchor(QGraphicsView::NoAnchor);
 	auto* scene = new FGraphicsScene(this);
 	this->setScene(scene);
+	
+	// Initialize outlier handler
+	m_outlierHandler = new OutlierHandler(this, this);
 
 	//this->scene()->setSceneRect(0,0, rect().width(), rect().height());
 
@@ -896,6 +898,7 @@ PaletteItem* SketchWidget::addPartItem(ModelPart * modelPart, ViewLayer::ViewLay
 	}
 
 	bool hideSuper = modelPart->hasSubparts() && !temporary && viewID == ViewLayer::SchematicView;
+
 	if (result) {
 		//DebugDialog::debug(QString("addPartItem %1").arg(viewID));
 		addToScene(paletteItem, paletteItem->viewLayerID());
@@ -920,13 +923,21 @@ PaletteItem* SketchWidget::addPartItem(ModelPart * modelPart, ViewLayer::ViewLay
 		// Error rendering the image. This can also happen
 		// if filename cases do not match on case sensitive file
 		// systems.
-		auto *mb = new QMessageBox(this->parentWidget());
-		mb->setAttribute(Qt::WA_DeleteOnClose, true);
-		mb->setWindowTitle("Fritzing");
-		mb->setText(QObject::tr("Error reading file %1: %2.").arg(modelPart->path(), error));
-		mb->setIcon(QMessageBox::Critical);
-		mb->show();
+		// Store error message to show after drag operation completes
+		QString errorTitle = "Fritzing";
+		QString errorMessage = QObject::tr("Error reading file %1: %2.").arg(modelPart->path(), error);
 
+		// Quickfix: Show non-modal error dialog to avoid breaking drag/drop operations
+		FMessageBox* errorDialog = FMessageBox::createCustom(
+			this->parentWidget(), 
+			QMessageBox::Critical,
+			errorTitle,
+			errorMessage
+		);
+		errorDialog->setModal(false);
+		errorDialog->setAttribute(Qt::WA_DeleteOnClose);
+		errorDialog->show();
+		
 		DebugDialog::debug(QString("addPartItem renderImage failed %1 %2").arg(modelPart->moduleID()).arg(error));
 		return paletteItem;
 	}
@@ -1451,17 +1462,17 @@ void SketchWidget::updateWireForCommand(long id, const QString & connectorID, bo
 }
 
 void SketchWidget::rotateItemForCommand(long id, double degrees) {
-	//DebugDialog::debug(QString("rotating %1 %2").arg(id).arg(degrees) );
-
-	if (!isVisible()) return;
-
 	ItemBase * itemBase = findItem(id);
 	if (itemBase) {
 		itemBase->rotateItem(degrees, false);
 		if (m_infoView) m_infoView->updateRotation(itemBase);
+	} else {
+		DebugDialog::debug(QString("SketchWidget::rotateItemForCommand - item not found! id: %1").arg(id));
+		qDebug() << "SketchWidget::rotateItemForCommand: item not found! " << id;
+		Q_ASSERT(itemBase);
 	}
-
 }
+
 void SketchWidget::transformItemForCommand(long id, const QTransform & matrix) {
 	ItemBase * itemBase = findItem(id);
 	if (itemBase) {
@@ -1471,8 +1482,6 @@ void SketchWidget::transformItemForCommand(long id, const QTransform & matrix) {
 }
 
 void SketchWidget::flipItemForCommand(long id, Qt::Orientations orientation) {
-	//DebugDialog::debug(QString("flipping %1 %2").arg(id).arg(orientation) );
-
 	if (!isVisible()) return;
 
 	ItemBase * itemBase = findItem(id);
@@ -1485,18 +1494,6 @@ void SketchWidget::flipItemForCommand(long id, Qt::Orientations orientation) {
 
 void SketchWidget::changeWireForCommand(long fromID, QLineF line, QPointF pos, bool updateConnections, bool updateRatsnest)
 {
-	/*
-	DebugDialog::debug(QString("change wire %1; %2,%3,%4,%5; %6,%7; %8")
-			.arg(fromID)
-			.arg(line.x1())
-			.arg(line.y1())
-			.arg(line.x2())
-			.arg(line.y2())
-			.arg(pos.x())
-			.arg(pos.y())
-			.arg(updateConnections) );
-	*/
-
 	ItemBase * fromItem = findItem(fromID);
 	if (!fromItem) return;
 
@@ -1814,14 +1811,26 @@ QByteArray SketchWidget::removeOutsideConnections(const QByteArray & itemData, Q
 
 void SketchWidget::dragEnterEvent(QDragEnterEvent *event)
 {
+	const QMimeData* mimeData = event->mimeData();
+
+	if (!mimeData) {
+		DebugDialog::debug("SketchWidget::dragEnterEvent: mimeData() is null");
+		event->ignore();
+		return;
+	}
+	
+	const bool hasSketchData = mimeData->hasFormat("application/x-dndsketchdata");
+	auto * source = event->source();
+	const QPointF position = event->position();
+	
 	if (dragEnterEventAux(event)) {
 		setupAutoscroll(false);
 		event->acceptProposedAction();
 	}
-	else if (event->mimeData()->hasFormat("application/x-dndsketchdata")) {
-		if (event->source() != this) {
+	else if (hasSketchData) {
+		if (source && source != this) {
 			m_movingItem = nullptr;
-			auto * other = dynamic_cast<SketchWidget *>(event->source());
+			auto * other = dynamic_cast<SketchWidget *>(source);
 			if (!other) {
 				throw "drag enter event from unknown source";
 			}
@@ -1832,7 +1841,7 @@ void SketchWidget::dragEnterEvent(QDragEnterEvent *event)
 			m_movingItem = new QGraphicsSvgItem();
 			m_movingItem->setSharedRenderer(other->m_movingSVGRenderer);
 			this->scene()->addItem(m_movingItem);
-			m_movingItem->setPos(mapToScene(event->position().toPoint()) - other->m_movingSVGOffset);
+			m_movingItem->setPos(mapToScene(position.toPoint()) - other->m_movingSVGOffset);
 		}
 		event->acceptProposedAction();
 	}
@@ -1868,14 +1877,21 @@ bool SketchWidget::setDroppingItemAndOffset(const QPoint & pos, const QPointF & 
 
 
 bool SketchWidget::dragEnterEventAux(QDragEnterEvent *event) {
-	if (!event->mimeData()->hasFormat("application/x-dnditemdata")) return false;
+	const QMimeData* mimeData = event->mimeData();
+	if (!mimeData) {
+		DebugDialog::debug("SketchWidget::dragEnterEventAux: mimeData() is null");
+		return false;
+	}
+	
+	if (!mimeData->hasFormat("application/x-dnditemdata")) return false;
+	const QByteArray itemData = mimeData->data("application/x-dnditemdata");
+	const QPointF position = event->position();
 
 	scene()->setSceneRect(scene()->sceneRect());	// prevents inadvertent scrolling when dragging in items from the parts bin
 	m_clearSceneRect = true;
 
 	m_droppingWire = false;
-	QByteArray itemData = event->mimeData()->data("application/x-dnditemdata");
-	QDataStream dataStream(&itemData, QIODevice::ReadOnly);
+	QDataStream dataStream(const_cast<QByteArray*>(&itemData), QIODevice::ReadOnly);
 
 	QString moduleID;
 	QPointF offset;
@@ -1890,9 +1906,8 @@ bool SketchWidget::dragEnterEventAux(QDragEnterEvent *event) {
 	m_droppingWire = (modelPart->itemType() == ModelPart::Wire);
 	if (ItemDrag::cache().contains(this)) {
 		m_droppingItem->setVisible(true);
-	}
-	else {
-		if (!setDroppingItemAndOffset(event->position().toPoint(), offset, modelPart)) {
+	} else {
+		if (!setDroppingItemAndOffset(position.toPoint(), offset, modelPart)) {
 			return false;
 		}
 
@@ -1961,6 +1976,12 @@ void SketchWidget::dragLeaveEvent(QDragLeaveEvent * event) {
 
 void SketchWidget::dragMoveEvent(QDragMoveEvent *event)
 {
+	if (!event->mimeData()) {
+		DebugDialog::debug("SketchWidget::dragMoveEvent: mimeData() is null");
+		event->ignore();
+		return;
+	}
+	
 	if (event->mimeData()->hasFormat("application/x-dnditemdata")) {
 		dragMoveHighlightConnector(event->position().toPoint());
 		event->acceptProposedAction();
@@ -2000,7 +2021,8 @@ void SketchWidget::dragMoveHighlightConnector(QPointF eventPos) {
 	checkAutoscroll(m_globalPos);
 
 	QPointF loc = this->mapToScene(eventPos.toPoint()) - m_droppingOffset;
-	if (m_alignToGrid && (m_alignmentItem)) {
+	
+	if ((m_alignmentItem) && shouldAlignToGrid()) {
 		QPointF l =  m_alignmentItem->getViewGeometry().loc();
 		alignLoc(loc, m_alignmentStartPoint, loc, l);
 	}
@@ -2014,6 +2036,12 @@ void SketchWidget::dragMoveHighlightConnector(QPointF eventPos) {
 
 void SketchWidget::dropEvent(QDropEvent *event)
 {
+	if (!event->mimeData()) {
+		DebugDialog::debug("SketchWidget::dropEvent: mimeData() is null");
+		event->ignore();
+		return;
+	}
+	
 	m_alignmentItem = nullptr;
 
 	turnOffAutoscroll();
@@ -2249,8 +2277,8 @@ bool SketchWidget::moveByArrow(double dx, double dy, QKeyEvent * event, bool isR
 		dx *= 10;
 		dy *= 10;
 	}
-
-	if (m_alignToGrid) {
+	
+	if (shouldAlignToGrid()) {
 		dx *= gridSizeInches() * GraphicsUtils::SVGDPI;
 		dy *= gridSizeInches() * GraphicsUtils::SVGDPI;
 	}
@@ -2271,6 +2299,11 @@ bool SketchWidget::spaceBarIsPressed() noexcept {
 	// this should be const and constexpr but causes the compiler to optimize incorrectly
 	// and prevents middle clicking to scroll from working correctly
 	return m_spaceBarIsPressed || m_middleMouseIsPressed;
+}
+
+bool SketchWidget::shouldAlignToGrid() const {
+	// Align to grid only if it's enabled globally AND Ctrl key is not pressed
+	return m_alignToGrid && !(QApplication::keyboardModifiers() & Qt::ControlModifier);
 }
 
 void SketchWidget::mousePressEvent(QMouseEvent *event)
@@ -2326,6 +2359,13 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 	if (item != wasItem) {
 		// if the item was deleted during mousePressEvent
 		// for example, by shift-clicking a connectorItem
+		auto * connectorItem = dynamic_cast<ConnectorItem *>(wasItem);
+		if (connectorItem) {
+			scene()->clearSelection();
+			viewItemInfo(connectorItem->attachedTo());
+			setLastPaletteItemSelectedIf(connectorItem->attachedTo());
+			connectorItem->attachedTo()->setSelected(true);
+		}
 		return;
 	}
 
@@ -3172,7 +3212,7 @@ void SketchWidget::moveItemsAux(QPointF scenePos, QPointF globalPos, bool checkA
 		if (!result) return;
 	}
 
-	if (m_alignToGrid && (m_alignmentItem)) {
+	if ((m_alignmentItem) && shouldAlignToGrid()) {
 		QPointF currentParentPos = m_alignmentItem->mapToParent(m_alignmentItem->mapFromScene(scenePos));
 		QPointF buttonDownParentPos = m_alignmentItem->mapToParent(m_alignmentItem->mapFromScene(m_mousePressScenePos));
 		alignLoc(scenePos, m_alignmentStartPoint, currentParentPos, buttonDownParentPos);
@@ -3335,19 +3375,18 @@ void SketchWidget::mouseReleaseEvent(QMouseEvent *event) {
 	// make sure this is cleared
 	m_bendpointWire = nullptr;
 
-	if (m_moveEventCount == 0) {
-		if (this->m_holdingSelectItemCommand) {
-			if (m_holdingSelectItemCommand->updated()) {
-				SelectItemCommand* tempCommand = m_holdingSelectItemCommand;
-				m_holdingSelectItemCommand = nullptr;
-				//DebugDialog::debug(QString("scene changed push select %1").arg(scene()->selectedItems().count()));
-				m_undoStack->push(tempCommand);
-			}
-			else {
-				clearHoldingSelectItem();
-			}
+	if (this->m_holdingSelectItemCommand) {
+		if (m_holdingSelectItemCommand->updated()) {
+			SelectItemCommand* tempCommand = m_holdingSelectItemCommand;
+			m_holdingSelectItemCommand = nullptr;
+			//DebugDialog::debug(QString("scene changed push select %1").arg(scene()->selectedItems().count()));
+			m_undoStack->push(tempCommand);
+		}
+		else {
+			clearHoldingSelectItem();
 		}
 	}
+
 	m_savedItems.clear();
 	m_savedWires.clear();
 }
@@ -3358,6 +3397,23 @@ bool SketchWidget::checkMoved(bool wait)
 		return false;
 	}
 
+	if (m_savedItems.empty()) {
+		return false;
+	}
+
+	// Validate that saved items are still valid and in the scene
+	QList<long> itemsToRemove;
+	Q_FOREACH (long id, m_savedItems.keys()) {
+		ItemBase * item = m_savedItems.value(id);
+		if (!item || !scene()->items().contains(item)) {
+			itemsToRemove.append(id);
+		}
+	}
+	Q_FOREACH (long id, itemsToRemove) {
+		m_savedItems.remove(id);
+	}
+
+	// If no valid items remain after validation, return
 	if (m_savedItems.empty()) {
 		return false;
 	}
@@ -3521,7 +3577,8 @@ ItemBase * SketchWidget::placePartDroppedInOtherView(ModelPart * modelPart, View
 	ViewGeometry vg(viewGeometry);
 	vg.setLoc(to + dp);
 	ItemBase * itemBase = addItemAux(modelPart, viewLayerPlacement, vg, id, true, m_viewID, false);
-	if (m_alignToGrid && (itemBase)) {
+	
+	if ((itemBase) && shouldAlignToGrid()) {
 		alignOneToGrid(itemBase);
 	}
 
@@ -3555,8 +3612,7 @@ void SketchWidget::selectionChangedSlot() {
 			if (!base) continue;
 
 			saveBase = base;
-			m_holdingSelectItemCommand->addRedo(base->layerKinChief()->id());
-			selCount++;
+			selCount = m_holdingSelectItemCommand->addRedo(base->layerKinChief()->id());
 		}
 		if (selCount == 1) {
 			selString = tr("Select %1").arg(saveBase->title());
@@ -3566,6 +3622,13 @@ void SketchWidget::selectionChangedSlot() {
 		}
 		m_holdingSelectItemCommand->setText(selString);
 		m_holdingSelectItemCommand->setUpdated(true);
+
+		// Show in inspector here if selected via rectangle.
+		// For mouse clicks this was done in MousePressEvent.
+		if (saveBase && m_moveEventCount > 0) {
+			viewItemInfo(saveBase);
+			setLastPaletteItemSelectedIf(saveBase);
+		}
 	}
 }
 
@@ -4027,7 +4090,7 @@ void SketchWidget::dragRatsnestChanged()
 	ViewLayer::ViewLayerPlacement viewLayerPlacement = createWireViewLayerPlacement(ends[0], ends[1]);
 	if (viewLayerPlacement == ViewLayer::UnknownPlacement) {
 		// for now this should not be possible
-		QMessageBox::critical(this, tr("Fritzing"), tr("This seems like an attempt to create a trace across layers. This circumstance should not arise: please contact the developers."));
+		FMessageBox::critical(this, tr("Fritzing"), tr("This seems like an attempt to create a trace across layers. This circumstance should not arise: please contact the developers."));
 		return;
 	}
 
@@ -4387,6 +4450,10 @@ double SketchWidget::fitInWindow() {
 					 itemsRect.width() * borderFactor, itemsRect.height() * borderFactor);
 
 
+	// Check if the rectangle is reasonable for fitting
+	if (itemsRect.width() > 1000000 || itemsRect.height() > 1000000) {
+	}
+
 	// Avoid 'jumping' scrollbars by always caclulating as
 	// if they were both visible.
 	auto originalHorizontalPolicy = horizontalScrollBarPolicy();
@@ -4394,9 +4461,9 @@ double SketchWidget::fitInWindow() {
 	setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 	setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 
-	fitInView(itemsRect, Qt::KeepAspectRatio);
 	qreal viewMarginFactor = 0.6;
 	adjustSceneRect(itemsRect, viewMarginFactor);
+	fitInView(itemsRect, Qt::KeepAspectRatio);
 
 	setHorizontalScrollBarPolicy(originalHorizontalPolicy);
 	setVerticalScrollBarPolicy(originalVerticalPolicy);
@@ -4406,28 +4473,15 @@ double SketchWidget::fitInWindow() {
 	double scaleFactor = this->transform().m11();
 	m_scaleValue = scaleFactor * 100; // Convert scale factor to percentage
 
+
 	setUpdatesEnabled(updateState);
 	return m_scaleValue;
 }
 
 QRectF SketchWidget::calculateVisibleItemsBoundingRect() {
-	QRectF itemsRect;
-	for (QGraphicsItem* item : scene()->items()) {
-		if (!item->isVisible()) continue;
-
-		auto * partLabel = dynamic_cast<PartLabel *>(item);
-		if (partLabel && partLabel->initialized()) {
-			itemsRect |= partLabel->sceneBoundingRect();
-			continue;
-		}
-
-		auto * itemBase = dynamic_cast<ItemBase*>(item);
-		if (itemBase && itemBase->isEverVisible()) {
-			itemsRect |= itemBase->sceneBoundingRect();
-		}
-	}
-	return itemsRect;
+	return m_outlierHandler->calculateBoundingRectWithOutlierDetection(true);
 }
+
 
 void SketchWidget::adjustSceneRect(const QRectF &itemsRect, qreal viewMarginFactor) {
 	QRectF viewRectInViewCoord = mapToScene(viewport()->rect()).boundingRect();
@@ -4672,6 +4726,15 @@ void SketchWidget::mousePressConnectorEvent(ConnectorItem * connectorItem, QGrap
 
 void SketchWidget::rotateX(double degrees, bool rubberBandLegEnabled, ItemBase * originatingItem)
 {
+	if (originatingItem) {
+		QList<ConnectorItem *> visite;
+		for (auto * connectorItem : originatingItem->cachedConnectorItems()) {
+			connectorItem->clearConnectorHover();
+			connectorItem->restoreColor(visite);
+		}
+		originatingItem->clearConnectorHover();
+	}
+
 	if (qAbs(degrees) < 0.01) return;
 
 	clearHoldingSelectItem();
@@ -4694,22 +4757,36 @@ void SketchWidget::rotateX(double degrees, bool rubberBandLegEnabled, ItemBase *
 	QTransform rotation;
 	rotation.rotate(degrees);
 
-	QString string = tr("Rotate %2 (%1)")
-	                 .arg(ViewLayer::viewIDName(m_viewID))
-	                 .arg((m_savedItems.count() == 1) ? m_savedItems.values().at(0)->title() : QString::number(m_savedItems.count() + m_savedWires.count()) + " items" );
-	auto * parentCommand = new QUndoCommand(string);
-
-	//foreach (long id, m_savedItems.keys()) {
-	//m_savedItems.value(id)->debugInfo(QString("save item %1").arg(id));
-	//}
+	// Collect item IDs for merging comparison
+	QList<long> itemIDs;
+	for (auto it = m_savedItems.begin(); it != m_savedItems.end(); ++it) {
+		itemIDs.append(it.key());
+	}
+	for (auto it = m_savedWires.begin(); it != m_savedWires.end(); ++it) {
+		itemIDs.append(it.key()->id());
+	}
+	
+	QString itemsText = (m_savedItems.count() == 1) ? m_savedItems.values().at(0)->title() : QString::number(m_savedItems.count() + m_savedWires.count()) + " items";
+	auto * parentCommand = new RotateCommand(itemsText, ViewLayer::viewIDName(m_viewID), degrees, itemIDs, center);
 
 	new CleanUpWiresCommand(this, CleanUpWiresCommand::UndoOnly, parentCommand);
 	new CleanUpRatsnestsCommand(this, CleanUpWiresCommand::UndoOnly, parentCommand);
 
+	// Disconnect items before rotation (replaces disconnectFromFemale)
+	QList<long> connectionItemIDs;
+	Q_FOREACH (ItemBase * itemBase, m_savedItems) {
+		if (itemBase->itemType() != ModelPart::Wire) {
+			connectionItemIDs.append(itemBase->id());
+		}
+	}
+	if (!connectionItemIDs.isEmpty()) {
+		new DetectConnectionsCommand(this, connectionItemIDs, DetectConnectionsCommand::Before, parentCommand);
+	}
+
 	// change legs after connections have been updated (undo direction)
 	moveLegBendpoints(true, parentCommand);
 
-	rotatePartLabels(degrees, rotation, center, parentCommand);
+	rotatePartLabels(parentCommand->degreesPtr(), center, parentCommand);
 
 	QList<Wire *> wires;
 	Q_FOREACH (ItemBase * itemBase, m_savedItems.values()) {
@@ -4745,11 +4822,10 @@ void SketchWidget::rotateX(double degrees, bool rubberBandLegEnabled, ItemBase *
 			ViewGeometry vg1 = itemBase->getViewGeometry();
 			ViewGeometry vg2(vg1);
 			itemBase->calcRotation(rotation, center, vg2);
-			ConnectorPairHash connectorHash;
-			disconnectFromFemale(itemBase, m_savedItems, connectorHash, true, rubberBandLegEnabled, parentCommand);
 			new MoveItemCommand(this, itemBase->id(), vg1, vg1, true, parentCommand);
-			new RotateItemCommand(this, itemBase->id(), degrees, parentCommand);
+			new RotateItemCommand(this, itemBase->id(), parentCommand->degreesPtr(), parentCommand);
 			new MoveItemCommand(this, itemBase->id(), vg2, vg2, true, parentCommand);
+			
 		}
 		break;
 		}
@@ -4788,11 +4864,73 @@ void SketchWidget::rotateX(double degrees, bool rubberBandLegEnabled, ItemBase *
 			new ChangeWireCommand(this, wire->id(), vg1.line(), QLineF(QPointF(0,0), d0t + center - p1), vg1.loc(), vg1.loc(), true, true, parentCommand);
 		}
 	}
+
+	// Connect items after rotation (detects new overlapping connections)
+	if (!connectionItemIDs.isEmpty()) {
+		new DetectConnectionsCommand(this, connectionItemIDs, DetectConnectionsCommand::After, parentCommand);
+	}
+	
+	// Check for new connections after rotation (extracted from checkMoved logic)
+	Q_FOREACH (ItemBase * item, m_savedItems) {
+		rememberSticky(item, parentCommand);
+	}
+	
+	Q_FOREACH (ItemBase * item, m_savedItems) {
+		new CheckStickyCommand(this, BaseCommand::SingleView, item->id(), false, CheckStickyCommand::RedoOnly, parentCommand);
+	}
+	
+	Q_FOREACH (ItemBase * item, m_savedWires.keys()) {
+		rememberSticky(item, parentCommand);
+	}
+	
+	Q_FOREACH (ItemBase * item, m_savedWires.keys()) {
+		new CheckStickyCommand(this, BaseCommand::SingleView, item->id(), false, CheckStickyCommand::RedoOnly, parentCommand);
+	}
+	
+	QSet<ConnectorItem *> connectedItems;
+	
+	QList<ItemBase*> saveditemList = m_savedItems.values();
+	std::sort(saveditemList.begin(), saveditemList.end(), [](const ItemBase * a, const ItemBase * b) {
+		return a->zValue() > b->zValue();
+	});
+
+	for (ItemBase * item: saveditemList) {
+		for (ConnectorItem * fromConnectorItem: item->cachedConnectorItems()) {
+			if (item->itemType() == ModelPart::Wire) {
+				if (fromConnectorItem->connectionsCount() > 0) {
+					continue;
+				}
+			}
+			
+			ConnectorItem * toConnectorItem = fromConnectorItem->overConnectorItem();
+			if (toConnectorItem) {
+				toConnectorItem->connectorHover(item, false);
+				fromConnectorItem->setOverConnectorItem(nullptr);   // clean up
+				if (!connectedItems.contains(toConnectorItem)) {
+					extendChangeConnectionCommand(BaseCommand::CrossView, fromConnectorItem, toConnectorItem,
+								      ViewLayer::specFromID(toConnectorItem->attachedToViewLayerID()),
+								      true, parentCommand);
+					connectedItems.insert(toConnectorItem);
+				} else {
+					// debug() << "SketchWidget::rotateX: Skipping duplicate connection to" << toConnectorItem->connectorSharedName();
+				}
+			}
+		}
+	}
+
+	
+	clearTemporaries();
+
 	new CleanUpRatsnestsCommand(this, CleanUpWiresCommand::RedoOnly, parentCommand);
 	new CleanUpWiresCommand(this, CleanUpWiresCommand::RedoOnly, parentCommand);
 
 	m_undoStack->push(parentCommand);
+	
+	// Clear saved items as they're no longer needed
+	m_savedItems.clear();
+	m_savedWires.clear();
 }
+
 
 void SketchWidget::rotateWire(Wire * wire, QTransform & rotation, QPointF center, bool undoOnly, QUndoCommand * parentCommand) {
 	//wire->debugInfo("rotating wire");
@@ -4830,10 +4968,10 @@ void SketchWidget::rotateWire(Wire * wire, QTransform & rotation, QPointF center
 
 }
 
-void SketchWidget::rotatePartLabels(double degrees, QTransform &, QPointF center, QUndoCommand * parentCommand)
+void SketchWidget::rotatePartLabels(const double* degreesPtr, QPointF center, QUndoCommand * parentCommand)
 {
 	Q_UNUSED(center);
-	Q_UNUSED(degrees);
+	Q_UNUSED(degreesPtr);
 	Q_UNUSED(parentCommand);
 }
 
@@ -5209,6 +5347,7 @@ void SketchWidget::keyReleaseEvent(QKeyEvent * event) {
 		QGraphicsView::keyReleaseEvent(event);
 	}
 }
+
 
 void SketchWidget::arrowTimerTimeout() {
 	m_movingByArrow = false;
@@ -5749,7 +5888,7 @@ void SketchWidget::wireSplitSlot(Wire* wire, QPointF newPos, QPointF oldPos, con
 
 	long fromID = wire->id();
 
-	if (m_alignToGrid) {
+	if (shouldAlignToGrid()) {
 		alignLoc(newPos, newPos, QPointF(0,0), QPointF(0,0));
 	} else {
 		//We need to place the bendpoint on the original wire
@@ -6120,8 +6259,6 @@ void SketchWidget::updateInfoViewSlot() {
 		viewItemInfo(chief);
 		return;
 	}
-
-	viewItemInfo(m_lastPaletteItemSelected);
 }
 
 long SketchWidget::setUpSwap(SwapThing & swapThing, bool master)
@@ -7441,13 +7578,24 @@ void SketchWidget::partLabelMoved(ItemBase * itemBase, QPointF oldPos, QPointF o
 	m_undoStack->push(command);
 }
 
-
-void SketchWidget::rotateFlipPartLabelForCommand(ItemBase * itemBase, double degrees, Qt::Orientations flipDirection) {
+void SketchWidget::rotateFlipPartLabelForCommand(ItemBase * itemBase, double degrees, Qt::Orientations flipDirection)
+{
 	auto * command = new RotateFlipLabelCommand(this, itemBase->id(), degrees, flipDirection, nullptr);
-	command->setText(tr("%1 label '%2'").arg((degrees != 0) ? tr("Rotate") : tr("Flip")).arg(itemBase->title()));
+	
+	if (degrees != 0) {
+		// For rotation, bake in "Rotate" and include degrees placeholder
+		command->setTextTemplate(tr("Rotate label '%1' (%2°)"));
+	} else {
+		// For flip, bake in "Flip" and specific orientation
+		if (flipDirection == Qt::Horizontal) {
+			command->setTextTemplate(tr("Flip label '%1' (horizontal)"));
+		} else {
+			command->setTextTemplate(tr("Flip label '%1' (vertical)"));
+		}
+	}
+	
 	m_undoStack->push(command);
 }
-
 
 void SketchWidget::rotateFlipPartLabelForCommand(long itemID, double degrees, Qt::Orientations flipDirection) {
 	ItemBase * itemBase = findItem(itemID);
@@ -7560,6 +7708,79 @@ QList<QGraphicsItem *> SketchWidget::getVisibleItemsAndLabels(RenderThing & rend
 	return itemsAndLabels;
 }
 
+void SketchWidget::processTextElementsInSVG(QString &svg, ItemBase *itemBase, RenderThing & renderThing) {
+	if (m_viewID != ViewLayer::SchematicView) {
+		return;
+	}
+
+	QDomDocument doc;
+	QString errorStr;
+	int errorLine;
+	int errorColumn;
+
+	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+		return;
+	}
+
+	QDomElement root = doc.documentElement();
+	QDomNodeList textNodes = root.elementsByTagName("text");
+
+	if (textNodes.count() == 0) {
+		return;
+	}
+
+	QTransform itemTransform = itemBase->transform();
+	double rotation = 0;
+	bool isFlipped = GraphicsUtils::isFlipped(itemTransform, rotation);
+
+	if (!isFlipped && !(rotation >= 135 && rotation <= 225)) {
+		return;
+	}
+
+	// Get bounding boxes first.
+	QList<QRectF> boundingBoxes;
+	QString svgForBoundaryBox = TextUtils::makeSVGHeader(renderThing.printerScale, renderThing.dpi, renderThing.imageRect.width(), renderThing.imageRect.height());
+	svgForBoundaryBox += svg + "</svg>";
+	QDomDocument tempDoc;
+	tempDoc.setContent(svgForBoundaryBox);
+	QDomNodeList tempTextNodes = tempDoc.elementsByTagName("text");
+	for (int i = 0; i < tempTextNodes.count(); i++) {
+		tempTextNodes.at(i).toElement().setAttribute("id", QString("text%1").arg(i));
+	}
+	QSvgRenderer renderer(tempDoc.toByteArray());
+	for (int i = 0; i < tempTextNodes.count(); i++) {
+		boundingBoxes.append(renderer.boundsOnElement(QString("text%1").arg(i)));
+	}
+
+	// Now do the actual transformations.
+	for (int i = 0; i < textNodes.count(); i++) {
+		QDomElement textElement = textNodes.at(i).toElement();
+		QRectF boundingBox = boundingBoxes.at(i);
+
+		QTransform transform;
+		if (isFlipped) {
+			transform.translate(boundingBox.center().x(), 0);
+			transform.scale(-1, 1);
+			transform.translate(-boundingBox.center().x(), 0);
+		}
+
+		if (rotation >= 135 && rotation <= 225) {
+			transform.translate(boundingBox.center().x(), boundingBox.center().y());
+			transform.rotate(180);
+			transform.translate(-boundingBox.center().x(), -boundingBox.center().y());
+		}
+
+		if (!transform.isIdentity()) {
+			QDomElement gElement = doc.createElement("g");
+			textElement.parentNode().insertBefore(gElement, textElement);
+			gElement.appendChild(textElement);
+			TextUtils::setSVGTransform(gElement, transform);
+		}
+	}
+
+	svg = doc.toString();
+}
+
 QString translateSVG(QString & svg, QPointF loc, double dpi, double printerScale) {
 	loc.setX(loc.x() * dpi / printerScale);
 	loc.setY(loc.y() * dpi / printerScale);
@@ -7622,6 +7843,11 @@ QString SketchWidget::renderToSVG(RenderThing & renderThing, QList<QGraphicsItem
 			if (itemSvg.isEmpty()) continue;
 
 			TextUtils::fixMuch(itemSvg, false);
+
+			// Process text elements for proper rotation/flipping when exporting SVG
+			if (applyViewFromBelow) {
+				processTextElementsInSVG(itemSvg, itemBase, renderThing);
+			}
 
 			QString legSvg;
 			QDomDocument doc;
@@ -9142,7 +9368,7 @@ bool SketchWidget::acceptsTrace(const ViewGeometry &) {
 }
 
 QPointF SketchWidget::alignOneToGrid(ItemBase * itemBase) {
-	if (m_alignToGrid) {
+	if (shouldAlignToGrid()) {
 		QHash<long, ItemBase *> savedItems;
 		QHash<Wire *, ConnectorItem *> savedWires;
 		findAlignmentAnchor(itemBase, savedItems, savedWires);
@@ -9332,6 +9558,7 @@ void SketchWidget::setMoveLockForCommand(long id, bool lock)
 void SketchWidget::triggerRotate(ItemBase * itemBase, double degrees)
 {
 	QList<QGraphicsItem *> selectedItems = scene()->selectedItems();
+
 	setIgnoreSelectionChangeEvents(true);
 	this->clearSelection();
 	itemBase->setSelected(true);
@@ -9734,7 +9961,7 @@ void SketchWidget::showUnrouted() {
 
 	QString message = tr("Unrouted connections are highlighted in yellow.");
 	if (toShow.count() == 0) message = tr("There are no unrouted connections");
-	QMessageBox::information(this, tr("Unrouted connections"),
+	FMessageBox::information(this, tr("Unrouted connections"),
 	                         tr("%1\n\n"
 	                            "Note: you can also trigger this display by mousing down on the routing status text in the status bar.").arg(message));
 
@@ -9789,7 +10016,7 @@ void SketchWidget::selectItemsWithModuleID(ModelPart * modelPart) {
 	}
 
 	if (itemBases.count() == 0) {
-		QMessageBox::information(nullptr, "Not found", tr("Part '%1' not found in sketch").arg(modelPart->title()));
+		FMessageBox::information(nullptr, "Not found", tr("Part '%1' not found in sketch").arg(modelPart->title()));
 		return;
 	}
 
@@ -10551,4 +10778,22 @@ void SketchWidget::checkForReversedWires() {
 			wire->update();
 		}
 	}
+}
+
+
+
+void SketchWidget::showUndoHistoryWidget() {
+	// Emit signal to show the undo history widget
+	emit showUndoHistorySignal();
+}
+
+void SketchWidget::updateZoomFromCurrentTransform() {
+	// Update both zoom tracking variables based on current transform
+	double scaleFactor = this->transform().m11();
+	m_scaleValue = scaleFactor * 100; // Convert scale factor to percentage (for ZoomableGraphicsView)
+	m_zoom = scaleFactor * 100; // Also update m_zoom for consistency
+	
+	
+	// Emit the signal to update UI (like ZoomableGraphicsView does)
+	Q_EMIT zoomChanged(m_scaleValue);
 }

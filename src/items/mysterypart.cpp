@@ -77,6 +77,9 @@ void MysteryPart::setChipLabel(QString chipLabel, bool force) {
 
 	if (!force && m_chipLabel.compare(chipLabel) == 0) return;
 
+	chipLabel.replace("&nbsp;", QChar(0x00A0));
+	chipLabel.replace("&nnbsp;", QChar(0x202F));
+
 	m_chipLabel = chipLabel;
 
 	QString svg;
@@ -91,10 +94,15 @@ void MysteryPart::setChipLabel(QString chipLabel, bool force) {
 	{
 		QTransform  transform = untransform();
 		svg = makeSvg(chipLabel, false);
-		bool normalized = false;
-		svg = retrieveSchematicSvg(svg, normalized);
+		svg = retrieveSchematicSvg(svg);
 		resetLayerKin(svg);
+		// changing the chip label might change the size, so we also update the connectors.
+		resetConnectors();
+
 		retransform(transform);
+
+		QList<ConnectorItem *> already;
+		updateConnections(true, already);
 	}
 	break;
 	default:
@@ -116,17 +124,14 @@ QString MysteryPart::retrieveSvg(ViewLayer::ViewLayerID viewLayerID, QHash<QStri
 
 	case ViewLayer::Schematic:
 	{
-		bool normalized = false;
-		svg = retrieveSchematicSvg(svg, normalized);
-		if (!normalized) {
-			SvgFileSplitter splitter;
-			bool result = splitter.splitString(svg, "schematic");
+		svg = retrieveSchematicSvg(svg);
+		SvgFileSplitter splitter;
+		bool result = splitter.splitString(svg, "schematic");
+		if (result) {
+			double factor;
+			result = splitter.normalize(dpi, "schematic", blackOnly, factor);
 			if (result) {
-				double factor;
-				result = splitter.normalize(dpi, "schematic", blackOnly, factor);
-				if (result) {
-					svg = splitter.elementString("schematic");
-				}
+				svg = splitter.elementString("schematic");
 			}
 		}
 		return TextUtils::removeSVGHeader(svg);
@@ -138,14 +143,13 @@ QString MysteryPart::retrieveSvg(ViewLayer::ViewLayerID viewLayerID, QHash<QStri
 	return svg;
 }
 
-QString MysteryPart::retrieveSchematicSvg(QString & svg, bool & normalized) {
+QString MysteryPart::retrieveSchematicSvg(const QString & svg) {
 	bool hasLocal = false;
 	QStringList labels = getPinLabels(hasLocal);
 
-	svg = makeSchematicSvg(labels, false);
-	normalized = false;
+	QString newSvg = makeSchematicSvg(labels, false);
 
-	return TextUtils::replaceTextElement(svg, "label", m_chipLabel);
+	return TextUtils::replaceTextElement(newSvg, "label", m_chipLabel);
 }
 
 
@@ -607,20 +611,19 @@ QString MysteryPart::makeBreadboardSipSvg(const QString & expectedFileName)
 }
 
 bool MysteryPart::changePinLabels(bool sip) {
-
 	if (m_viewID != ViewLayer::SchematicView) return true;
 
 	bool hasLocal = false;
 	QStringList labels = getPinLabels(hasLocal);
 	if (labels.count() == 0) return true;
 
-	QTransform  transform = untransform();
+	QTransform transform = untransform();
 
 	QString svg = MysteryPart::makeSchematicSvg(labels, sip);
 
 	QString chipLabel = modelPart()->localProp("chip label").toString();
 	if (!chipLabel.isEmpty()) {
-		svg =TextUtils::replaceTextElement(svg, "label", chipLabel);
+		svg = TextUtils::replaceTextElement(svg, "label", chipLabel);
 	}
 
 	resetLayerKin(svg);

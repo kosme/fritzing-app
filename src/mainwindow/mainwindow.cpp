@@ -38,6 +38,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QStyle>
 #include <QFontMetrics>
 #include <QApplication>
+#include <QStyleFactory>
 
 
 #include "mainwindow.h"
@@ -77,6 +78,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../mainwindow/FProbeDropByModuleID.h"
 #include "../mainwindow/FProbeKeyPressEvents.h"
 #include "../mainwindow/fprobefocuswidget.h"
+#include "FProbeCurrentSketchXml.h"
 #include "model/fzpinfo.h"
 #include "connectors/debugconnectors.h"
 #include "connectors/debugconnectorsprobe.h"
@@ -520,12 +522,14 @@ void MainWindow::init(ReferenceModel *referenceModel, bool lockFiles) {
 		m_fileProgressDialog->setValue(98);
 	}
 
+	// Probes are used by the FTesting server, which is disabled by default. See fapplication options to enable it.
 	new FProbeStartSimulator(m_simulator);
 	auto fProbe = new FProbeDropByModuleID();
 
 	connect(fProbe, &FProbeDropByModuleID::putItemByModuleID, this, &MainWindow::putItemByModuleID);
 
 	new FProbeKeyPressEvents();
+	new FProbeCurrentSketchXml(m_sketchModel);
 
 	FProbeFocusWidget *focusWidgetProbe = new FProbeFocusWidget();
 
@@ -670,6 +674,10 @@ void MainWindow::connectPairs() {
 	connect(m_breadboardGraphicsView, &SketchWidget::undoSignal, m_undoAct, &QAction::trigger);
 	connect(m_schematicGraphicsView, &SketchWidget::undoSignal, m_undoAct, &QAction::trigger);
 	connect(m_pcbGraphicsView, &SketchWidget::undoSignal, m_undoAct, &QAction::trigger);
+	
+	connect(m_breadboardGraphicsView, &SketchWidget::showUndoHistorySignal, this, &MainWindow::showUndoHistory);
+	connect(m_schematicGraphicsView, &SketchWidget::showUndoHistorySignal, this, &MainWindow::showUndoHistory);
+	connect(m_pcbGraphicsView, &SketchWidget::showUndoHistorySignal, this, &MainWindow::showUndoHistory);
 
 	connect(m_breadboardGraphicsView, &SketchWidget::disableUndoRedo, this, &MainWindow::disableUndoAction);
 	connect(m_breadboardGraphicsView, &SketchWidget::enableUndoRedo, this, &MainWindow::enableUndoAction);
@@ -1996,11 +2004,19 @@ QList<ModelPart*> MainWindow::loadBundledPart(const QString &fileName, bool addT
 
 	if (mps.count() < 1) {
 		// if this fails, that means that the bundled was wrong
-		FMessageBox::warning(
-		    this,
-		    tr("Fritzing"),
-		    tr("Unable to load part from '%1'").arg(fileName)
-		);
+		if (unzipDir.entryInfoList(QStringList() << ZIP_PART+"*").length() == 0) {
+			FMessageBox::warning(
+				this,
+				tr("Fritzing"),
+				tr("No part files with the required prefix '%1' where found inside in the shareable part '%2'").arg(ZIP_PART).arg(fileName)
+			);
+		} else {
+			FMessageBox::warning(
+			    this,
+			    tr("Fritzing"),
+			    tr("Unable to load part from '%1'").arg(fileName)
+			);
+		}
 		return QList<ModelPart*>();
 	}
 
@@ -3241,7 +3257,6 @@ void MainWindow::dropEvent(QDropEvent *event)
 	const QMimeData* mimeData = event->mimeData();
 
 	if (mimeData->hasUrls()) {
-		QStringList pathList;
 		QList<QUrl> urlList = mimeData->urls();
 
 		// extract the local paths of the files
@@ -3259,6 +3274,14 @@ bool MainWindow::hasAnyAlien() {
 
 void MainWindow::initStyleSheet()
 {
+	QStringList availableStyles = QStyleFactory::keys();
+	DebugDialog::DebugStream() << "Available styles:" << availableStyles.join(",");
+
+#ifdef Q_OS_WIN
+	// TODO: Replace this with windows11 style in Qt6.7? Also check qpa_platform setting in main.cpp (Qt < 6.5 setting)
+	// QApplication::setStyle("windowsvista");
+#endif
+
 	QString suffix = getStyleSheetSuffix();
 	QFile styleSheet(QString(":/resources/styles/%1.qss").arg(suffix));
 	if (!styleSheet.open(QIODevice::ReadOnly)) {

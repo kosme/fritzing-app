@@ -571,22 +571,15 @@ void ConnectorItem::restoreColor(QList<ConnectorItem *> & visited)
 		}
 	}
 
+	// DebugDialog::debug(QString("restore color cid:'%1' '%2' id:%3 '%4' vid:%5 vlid:%6")
+	// 	.arg(this->connectorSharedID())
+	// 	.arg(this->connectorSharedName())
+	// 	.arg(this->attachedToID())
+	// 	.arg(this->attachedToInstanceTitle())
+	// 	.arg(this->attachedToViewID())
+	// 	.arg(this->attachedToViewLayerID())
+	// );
 
-	/*
-	DebugDialog::debug(QString("restore color dobus:%1 bccount:%2 docross:%3 cid:'%4' '%5' id:%6 '%7' vid:%8 vlid:%9 %10")
-		.arg(doBuses)
-		.arg(busConnectionCount)
-		.arg(doCross)
-		.arg(this->connectorSharedID())
-		.arg(this->connectorSharedName())
-		.arg(this->attachedToID())
-		.arg(this->attachedToInstanceTitle())
-		.arg(this->attachedToViewID())
-		.arg(this->attachedToViewLayerID())
-		.arg(how)
-	);
-
-	*/
 }
 
 void ConnectorItem::setConnectedColor() {
@@ -819,6 +812,11 @@ void ConnectorItem::mousePressEvent(QGraphicsSceneMouseEvent *event) {
 	m_moveCount = 0;
 
 	if (event->button() != Qt::LeftButton) {
+		QGraphicsRectItem::mousePressEvent(event);
+		return;
+	}
+
+	if (event->modifiers() & Qt::ControlModifier) {
 		QGraphicsRectItem::mousePressEvent(event);
 		return;
 	}
@@ -1343,9 +1341,15 @@ void ConnectorItem::collectEqualPotential(
 		ViewGeometry::WireFlags skipFlags,
 		bool skipBuses)
 {
-	// take a local (temporary working) copy of the supplied list, and wipe the original
+	// Take a local (temporary working) copy of the supplied list, and wipe the original
 	QList<ConnectorItem *> tempItems = connectorItems;
 	connectorItems.clear();
+	
+	// Create a QSet for O(1) lookups instead of O(n) with QList::contains
+	QSet<ConnectorItem *> tempItemsSet;
+	for (ConnectorItem *item : tempItems) {
+		tempItemsSet.insert(item);
+	}
 
 	for (int i = 0; i < tempItems.count(); i++) {
 		ConnectorItem *connectorItem = tempItems[i];
@@ -1362,8 +1366,9 @@ void ConnectorItem::collectEqualPotential(
 			if (crossLayers) {
 				ConnectorItem *crossConnectorItem = connectorItem->getCrossLayerConnectorItem();
 				if (crossConnectorItem) {
-					if (!tempItems.contains(crossConnectorItem)) {
+					if (!tempItemsSet.contains(crossConnectorItem)) {
 						tempItems.append(crossConnectorItem);
+						tempItemsSet.insert(crossConnectorItem);
 					}
 				}
 			}
@@ -1373,7 +1378,7 @@ void ConnectorItem::collectEqualPotential(
 		connectorItems.append(connectorItem);
 
 		Q_FOREACH (ConnectorItem *cto, connectorItem->connectedToItems()) {
-			if (tempItems.contains(cto)) {
+			if (tempItemsSet.contains(cto)) {
 				continue;
 			}
 
@@ -1386,6 +1391,7 @@ void ConnectorItem::collectEqualPotential(
 
 			// add `approved` connected items to the list being processed
 			tempItems.append(cto);
+			tempItemsSet.insert(cto);
 		} // end foreach (ConnectorItem *cto, connectorItem->connectedToItems())
 
 		// When the kept connector item is part of a bus, include all of the other
@@ -1401,8 +1407,9 @@ void ConnectorItem::collectEqualPotential(
 				}
 #endif
 				Q_FOREACH (ConnectorItem *busConnectedItem, busConnectedItems) {
-					if (!tempItems.contains(busConnectedItem)) {
+					if (!tempItemsSet.contains(busConnectedItem)) {
 						tempItems.append(busConnectedItem);
+						tempItemsSet.insert(busConnectedItem);
 					}
 				}
 			}
@@ -1969,7 +1976,7 @@ double ConnectorItem::minDimension() {
 	return qMin(r.width(), r.height());
 }
 
-ConnectorItem * ConnectorItem::findConnectorUnder(bool useTerminalPoint, bool allowAlready, const QList<ConnectorItem *> & exclude, bool displayDragTooltip, ConnectorItem * other)
+ConnectorItem * ConnectorItem::findConnectorUnder(bool useTerminalPoint, bool allowAlready, const QList<ConnectorItem *> & exclude, bool displayDragTooltip, ConnectorItem * other, bool enableHoverFeedback)
 {
 	QList<QGraphicsItem *> items = useTerminalPoint
 	                               ? this->scene()->items(this->sceneAdjustedTerminalPoint(nullptr))
@@ -2023,21 +2030,25 @@ ConnectorItem * ConnectorItem::findConnectorUnder(bool useTerminalPoint, bool al
 	}
 
 	if (m_overConnectorItem&& candidate != m_overConnectorItem) {
-		m_overConnectorItem->connectorHover(nullptr, false);
+		if (enableHoverFeedback) {
+			m_overConnectorItem->connectorHover(nullptr, false);
+		}
 	}
 	if (candidate && candidate != m_overConnectorItem) {
-		candidate->connectorHover(nullptr, true);
+		if (enableHoverFeedback) {
+			candidate->connectorHover(nullptr, true);
+		}
 	}
 
 	m_overConnectorItem = candidate;
 
 	if (!candidate) {
-		if (this->connectorHovering()) {
+		if (this->connectorHovering() && enableHoverFeedback) {
 			this->connectorHover(nullptr, false);
 		}
 	}
 	else {
-		if (!this->connectorHovering()) {
+		if (!this->connectorHovering() && enableHoverFeedback) {
 			this->connectorHover(nullptr, true);
 		}
 	}

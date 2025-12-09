@@ -386,12 +386,12 @@ void ItemBase::removeLayerKin() {
 }
 
 void ItemBase::hoverEnterConnectorItem(QGraphicsSceneHoverEvent *, ConnectorItem * ) {
-	//DebugDialog::debug(QString("hover enter c %1").arg(instanceTitle()));
+	// DebugDialog::debug(QString("hover enter c %1").arg(instanceTitle()));
 	hoverEnterConnectorItem();
 }
 
 void ItemBase::hoverEnterConnectorItem() {
-	//DebugDialog::debug(QString("hover enter c %1").arg(instanceTitle()));
+	// DebugDialog::debug(QString("hover enter c %1").arg(instanceTitle()));
 	m_connectorHoverCount++;
 	hoverUpdate();
 }
@@ -404,7 +404,7 @@ void ItemBase::hoverMoveConnectorItem(QGraphicsSceneHoverEvent *, ConnectorItem 
 }
 
 void ItemBase::hoverLeaveConnectorItem() {
-	//DebugDialog::debug(QString("hover leave c %1").arg(instanceTitle()));
+	// DebugDialog::debug(QString("hover leave c %1").arg(instanceTitle()));
 	m_connectorHoverCount--;
 	hoverUpdate();
 }
@@ -416,8 +416,7 @@ void ItemBase::clearConnectorHover()
 }
 
 void ItemBase::connectorHover(ConnectorItem *, ItemBase *, bool hovering) {
-	//DebugDialog::debug(QString("hover c %1 %2").arg(hovering).arg(instanceTitle()));
-
+	// DebugDialog::debug(QString("hover c %1 %2").arg(hovering).arg(instanceTitle()));
 	if (hovering) {
 		m_connectorHoverCount2++;
 	}
@@ -685,13 +684,22 @@ bool ItemBase::busConnectorItems(ConnectorItem * fromConnectorItem, QList<class 
 	}
 
 	if (bus) {
-		for (Connector * connector: bus->connectors()) {
-			for (ConnectorItem * connectorItem: connector->viewItems()) {
+		// Use a temporary hash for O(1) lookups instead of O(n) with QList::contains
+		QSet<ConnectorItem*> itemsSet;
+		for (ConnectorItem* item : items) {
+			itemsSet.insert(item);
+		}
+		
+		for (Connector * connector : bus->connectors()) {
+			// Use viewItemsHash() directly to avoid converting hash to list
+			const QHash<int, QPointer<ConnectorItem>> &connectorItems = connector->viewItemsHash();
+			for (ConnectorItem * connectorItem : connectorItems) {
 				if (connectorItem != nullptr) {
 					//connectorItem->debugInfo(QString("on the bus %1").arg((long) connector, 0, 16));
 					if (connectorItem->attachedToViewID() == m_viewID) {
-						if (!items.contains(connectorItem)) {
+						if (!itemsSet.contains(connectorItem)) {
 							items.append(connectorItem);
+							itemsSet.insert(connectorItem);
 						}
 					}
 				}
@@ -1015,7 +1023,7 @@ void ItemBase::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
 		return;
 	}
 
-	if (m_hidden || m_inactive || m_layerHidden) {
+	if (m_hidden || m_layerHidden) {
 		event->ignore();
 		return;
 	}

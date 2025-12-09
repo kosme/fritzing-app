@@ -112,8 +112,8 @@ public:
 	void resetConnectors();
 	void resetConnectors(ItemBase * otherLayer, FSvgRenderer * otherLayerRenderer);
 	void resetConnector(ItemBase * itemBase, SvgIdLayer * svgIdLayer);
-	QStringList sipOrDipOrLabels(bool & hasLayout, bool & sip);
 	void resetLayerKin(const QString & svg);
+	virtual QString retrieveSchematicSvg(const QString & svg);
 	QTransform untransform();
 	void retransform(const QTransform &);
 

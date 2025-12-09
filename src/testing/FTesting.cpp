@@ -68,12 +68,14 @@ std::optional<QVariant> FTesting::readProbe(std::string name)
 	return std::nullopt;
 }
 
-void FTesting::writeProbe(std::string name, QVariant param)
+bool FTesting::writeProbe(std::string name, QVariant param)
 {
 	auto it = m_probeMap.find(name);
 	if(it != m_probeMap.end()) {
 		it->second->write(param);
+		return true;
 	}
+	return false;
 }
 
 void FTesting::initServer() {
@@ -112,8 +114,6 @@ void FTestingServerThread::run()
 	while (socket->canReadLine()) {
 		header += socket->readLine();
 	}
-
-	DebugDialog::debug("header " + header);
 
 	static auto line_end(QRegularExpression("[ \r\n][ \r\n]*"));
 	QStringList tokens = header.split(line_end, Qt::SplitBehaviorFlags::SkipEmptyParts);
@@ -154,6 +154,12 @@ void FTestingServerThread::run()
 		param = params.takeFirst();
 		param = QUrl::fromPercentEncoding(param.toUtf8());
 	}
+	
+	if (readOrWrite.compare("write") == 0) {
+		DebugDialog::debug(QString("FTesting write %1 %2").arg(command, param));
+	} else {
+		DebugDialog::debug(QString("FTesting read %1").arg(command));
+	}
 
 	int waitInterval = 100;     // 100ms to wait
 	int timeoutSeconds = 2 * 60;    // timeout after 2 minutes
@@ -174,9 +180,12 @@ void FTestingServerThread::run()
 	std::shared_ptr<FTesting> fTesting = FTesting::getInstance();
 
 	if (readOrWrite.compare("write") == 0) {
-		DebugDialog::debug(QString("FTesting write command %1 %2").arg(command, param));
-		fTesting->writeProbe(command.toStdString(), QVariant(param));
-		writeResponse(socket, 200, "OK", "text/plain", "");
+		bool success = fTesting->writeProbe(command.toStdString(), QVariant(param));
+		if (success) {
+			writeResponse(socket, 200, "OK", "text/plain", "");
+		} else {
+			writeResponse(socket, 404, "Not Found", "text/plain", "Probe not found");
+		}
 	} else {
 		std::optional<QVariant> probeResult = fTesting->readProbe(command.toStdString());
 

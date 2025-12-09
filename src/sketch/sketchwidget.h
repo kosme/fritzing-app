@@ -47,6 +47,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "utils/fpsmonitor.h"
 
 class SubpartSwapManager;
+class OutlierHandler;
 
 struct ItemCount {
 	int selCount;
@@ -124,6 +125,10 @@ public:
 	double fitInWindow();
 	QRectF calculateVisibleItemsBoundingRect();
 	void adjustSceneRect(const QRectF &itemsRect, qreal viewMarginFactor);
+	
+public:
+	void showUndoHistoryWidget();
+	void updateZoomFromCurrentTransform();
 	void rotateX(double degrees, bool rubberBandLegEnabled, ItemBase * originatingItem);
 	void flipX(Qt::Orientations orientation, bool rubberBandLegEnabled);
 	void addBendpoint(ItemBase * lastHoverEnterItem, ConnectorItem * lastHoverEnterConnectorItem, QPointF lastLocation);
@@ -215,6 +220,7 @@ public:
 	QString renderToSVGForSVGExport(RenderThing &, QGraphicsItem * board, const LayerList &);
 
 	bool spaceBarIsPressed() noexcept;
+	bool shouldAlignToGrid() const;
 	virtual long setUpSwap(SwapThing &, bool master);
 	void setUpSwapMiddle(SwapThing &, QString newModuleID, ItemBase * itemBase, long newID, bool master);
 	void setUpSwapFinal(SwapThing &, QString newModuleID, ItemBase * itemBase, long newID, bool master);
@@ -492,7 +498,7 @@ protected:
 	void changeLegAux(long fromID, const QString & fromConnectorID, const QPolygonF &, bool reset, bool relative, bool active, const QString & why);
 	void moveLegBendpoints(bool undoOnly, QUndoCommand * parentCommand);
 	void moveLegBendpointsAux(ConnectorItem * connectorItem, bool undoOnly, QUndoCommand * parentCommand);
-	virtual void rotatePartLabels(double degrees, QTransform &, QPointF center, QUndoCommand * parentCommand);
+	virtual void rotatePartLabels(const double* degreesPtr, QPointF center, QUndoCommand * parentCommand);
 	bool checkUpdateRatsnest(QList<ConnectorItem *> & connectorItems);
 	void makeRatsnestViewGeometry(ViewGeometry & viewGeometry, ConnectorItem * source, ConnectorItem * dest);
 	virtual double getTraceWidth();
@@ -509,6 +515,7 @@ protected:
 	void cleanupRatsnests(QList< QPointer<ConnectorItem> > & connectorItems, bool connect);
 	void rotateWire(Wire *, QTransform & rotation, QPointF center, bool undoOnly, QUndoCommand * parentCommand);
 	QList<QGraphicsItem *> getVisibleItemsAndLabels(RenderThing & renderThing, const LayerList & layers);
+	void processTextElementsInSVG(QString &svg, ItemBase *itemBase, RenderThing & renderThing);
 	QString renderToSVG(RenderThing &, QList<QGraphicsItem *> & itemsAndLabels, bool applyViewFromBelow = false);
 	QList<ItemBase *> collectSuperSubs(ItemBase *);
 	void squashShapes(QPointF scenePos);
@@ -577,6 +584,7 @@ Q_SIGNALS:
 	void disableUndoRedo();
 	void enableUndoRedo();
 	void undoSignal();
+	void showUndoHistorySignal();
 
 public:
 	void registerItem(ItemBase* itemBase);
@@ -658,6 +666,7 @@ protected:
 protected:
 	QPointer<class ReferenceModel> m_referenceModel;
 	QPointer<SketchModel> m_sketchModel;
+	OutlierHandler* m_outlierHandler;
 	ViewLayer::ViewID m_viewID;
 	class WaitPushUndoStack * m_undoStack = nullptr;
 	class SelectItemCommand * m_holdingSelectItemCommand = nullptr;

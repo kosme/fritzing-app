@@ -77,7 +77,7 @@ QString SVG2gerber::getGerber() {
 }
 
 int SVG2gerber::renderGerber(bool doubleSided, const QString & mainLayerName, ForWhy forWhy) {
-	bool gerberExportImprovementsEnabled = QSettings().value("gerberExportImprovementsEnabled").toBool();
+	bool gerberExportImprovementsEnabled = QSettings().value("gerberExportImprovementsEnabled", true).toBool();
 	if (forWhy != ForDrill) {
 		// human readable description comments
 		m_gerber_header = "G04 MADE WITH FRITZING*\n";
@@ -168,7 +168,7 @@ int SVG2gerber::renderGerber(bool doubleSided, const QString & mainLayerName, Fo
 	else {
 		if (gerberExportImprovementsEnabled) {
 			// label our layers
-			m_gerber_header += QString("%G04%1*%\n").arg(mainLayerName.toUpper());
+			m_gerber_header += QString("G04 %1*\n").arg(mainLayerName.toUpper());
 
 			// Not sure why we configure this at the end of the job again.
 			// Assuming the old "just to be safe" comment was intended to leave a
@@ -261,12 +261,12 @@ void SVG2gerber::convertShapes2paths(QDomNode node) {
 		return;
 	}
 
-	// recurse the children
-	QDomNodeList tagList = node.childNodes();
-
-	//DebugDialog::debug("child nodes: " + QString::number(tagList.length()));
-	for(int i = 0; i < tagList.length(); i++) {
-		convertShapes2paths(tagList.item(i));
+	// recurse the children using iterator to avoid O(n²) performance
+	QDomNode child = node.firstChild();
+	while (!child.isNull()) {
+		QDomNode nextChild = child.nextSibling(); // Get next before recursion since replaceChild modifies DOM
+		convertShapes2paths(child);
+		child = nextChild;
 	}
 }
 
