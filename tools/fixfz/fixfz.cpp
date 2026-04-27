@@ -50,8 +50,7 @@ void handleFile(const QString & filename) {
 	QFile file(filename);
 
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
+	int errorLine, errorColumn;
 	QDomDocument domDocument;
 
 	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {

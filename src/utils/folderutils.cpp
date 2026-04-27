@@ -19,6 +19,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 ********************************************************************/
 
 #include "folderutils.h"
+#include "sanitizeforpath.h"
 #include "lockmanager.h"
 #include "textutils.h"
 #include <QDesktopServices>
@@ -27,6 +28,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QTextStream>
 #include <QUuid>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QProcess>
 #include <QDesktopServices>
 #include <QUrl>
@@ -48,12 +50,11 @@ FolderUtils::FolderUtils() {
 	m_userFolders
 	        << "partfactory"
 	        << "backup"
-	        << "fzz";
+	        << "history"
+	        << "fzz"
+	        << "local_parts";
 	m_documentFolders
-	        << "bins"
-	        << "parts/user" << "parts/contrib"
-	        << "parts/svg/user/icon" << "parts/svg/user/breadboard" << "parts/svg/user/schematic" << "parts/svg/user/pcb"
-	        << "parts/svg/contrib/icon" << "parts/svg/contrib/breadboard" << "parts/svg/contrib/schematic" << "parts/svg/contrib/pcb";
+	        << "bins";
 
 }
 
@@ -152,6 +153,11 @@ QString FolderUtils::getUserBinsPath() {
 QString FolderUtils::getUserPartsPath() {
 	QDir dir(getTopLevelDocumentsPath());
 	return dir.absoluteFilePath("parts");
+}
+
+QString FolderUtils::getLocalPartsPath() {
+	QDir dir(getTopLevelUserDataStorePath());
+	return dir.absoluteFilePath("local_parts");
 }
 
 bool FolderUtils::createFolderAndCdIntoIt(QDir &dir, QString newFolder) {
@@ -566,6 +572,7 @@ bool FolderUtils::unzipTo(const QString &filepath, const QString &dirToDecompres
 			return false;
 		}
 		name=file.getActualFileName();
+		DebugDialog::debug(QString("  unzipped: %1").arg(name));
 		if(file.getZipError()!=UNZ_OK) {
 			error = QString("file.getFileName(): %1").arg(file.getZipError());
 			DebugDialog::debug(error);
@@ -792,6 +799,18 @@ QString FolderUtils::addToBasename(const QString &filePath, const QString &addit
 	return QString("%1/%2%3.%4").arg(path, baseName, addition, suffix);
 }
 
+bool FolderUtils::ensureDirectoryExists(const QString & filePath) {
+	QDir dir = QFileInfo(filePath).absoluteDir();
+	if (!dir.exists()) {
+		return dir.mkpath(dir.absolutePath());
+	}
+	return true;
+}
+
+QString FolderUtils::sanitizeForFolder(const QString & name) {
+	return sanitizeForPath(name);
+}
+
 bool FolderUtils::checkFileLoadability(QWidget* parent, const QString& filePath) {
 	QString fileType;
 	static const QMap<QString, QString> fileTypes {
@@ -871,4 +890,49 @@ bool FolderUtils::checkFileLoadability(QWidget* parent, const QString& filePath)
 		return false;
 	}
 	return true;
+}
+
+QString FolderUtils::getHistoryPath() {
+	return getTopLevelUserDataStorePath() + "/history";
+}
+
+void FolderUtils::savePreviousVersionToHistory(const QString &filePath, int maxVersions) {
+	QFileInfo sourceInfo(filePath);
+	if (!sourceInfo.exists() || sourceInfo.size() == 0) {
+		return;
+	}
+
+	QString historyDir = getHistoryPath();
+	QDir dir(historyDir);
+	if (!dir.exists()) {
+		dir.mkpath(historyDir);
+	}
+
+	// Build history filename: <md5_8chars>_<basename>_<timestamp>.<ext>
+	QByteArray pathHash = QCryptographicHash::hash(
+		sourceInfo.absoluteFilePath().toUtf8(), QCryptographicHash::Md5);
+	QString hashPrefix = pathHash.toHex().left(8);
+
+	QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+	QString historyFileName = QString("%1_%2_%3.%4")
+		.arg(hashPrefix,
+		     sourceInfo.completeBaseName(),
+		     timestamp,
+		     sourceInfo.suffix());
+
+	QString historyFilePath = dir.absoluteFilePath(historyFileName);
+	if (!QFile::copy(filePath, historyFilePath)) {
+		DebugDialog::debug(QString("savePreviousVersionToHistory: failed to copy '%1' to '%2'")
+			.arg(filePath, historyFilePath));
+		return;
+	}
+
+	// Prune: keep at most maxVersions files matching this path hash prefix
+	QStringList nameFilter;
+	nameFilter << (hashPrefix + "_*");
+	QFileInfoList historyFiles = dir.entryInfoList(nameFilter, QDir::Files, QDir::Time);
+	while (historyFiles.size() > maxVersions) {
+		QFileInfo oldest = historyFiles.takeLast();
+		QFile::remove(oldest.absoluteFilePath());
+	}
 }

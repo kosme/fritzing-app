@@ -273,15 +273,25 @@ void ItemBase::initNames() {
 	QSettings settings;
 	QString colorName = settings.value("ConnectedColor").toString();
 	if (!colorName.isEmpty()) {
+		// Add backwards compatibility for versions of Qt previous to 6.4
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+		QColor color = QColor::fromString(colorName);
+		#else
 		QColor color;
 		color.setNamedColor(colorName);
+		#endif
 		setConnectedColor(color);
 	}
 
 	colorName = settings.value("UnconnectedColor").toString();
 	if (!colorName.isEmpty()) {
+		// Add backwards compatibility for versions of Qt previous to 6.4
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+		QColor color = QColor::fromString(colorName);
+		#else
 		QColor color;
 		color.setNamedColor(colorName);
+		#endif
 		setUnconnectedColor(color);
 	}
 
@@ -1786,12 +1796,18 @@ QList<QPair<QString, QString>> ItemBase::collectPartsOfFamilyWithProp(const QStr
 	return collection;
 }
 
-QStringList ItemBase::collectValues(const QString & family, const QString & prop, QString & /* value */) {
+QStringList ItemBase::collectValues(const QString & family, const QString & prop, QString & value) {
 
 	if (TheReferenceModel == nullptr) return ___emptyStringList___;
 
 	QStringList values = CachedValues.value(family + prop, QStringList());
-	if (values.count() > 0) return values;
+	if (values.count() > 0) {
+		QStringList result = values;
+		if (!value.isEmpty() && !result.contains(value)) {
+			result.append(value);
+		}
+		return result;
+	}
 
 	values = TheReferenceModel->propValues(family, prop, true);
 
@@ -1817,7 +1833,13 @@ QStringList ItemBase::collectValues(const QString & family, const QString & prop
 	//foreach(QString v, values) {
 	//    DebugDialog::debug("\t" + v);
 	//}
-	return values;
+
+	QStringList result = values;
+	if (!value.isEmpty() && !result.contains(value)) {
+		result.append(value);
+	}
+
+	return result;
 }
 
 void ItemBase::resetValues(const QString & family, const QString & prop) {
@@ -2006,7 +2028,7 @@ void ItemBase::debugInfo2(const QString & msg) const
 	                   .arg(this->instanceTitle())
 	                   .arg(this->viewLayerID())
 	                   .arg(this->viewLayerPlacement())
-	                   .arg(this->wireFlags())
+	                   .arg(QVariant::fromValue(this->wireFlags()).toString())
 					   .arg((long long) dynamic_cast<const QGraphicsItem *>(this), 0, 16)
 	                   .arg(m_viewID)
 	                   .arg(this->zValue())
@@ -2135,10 +2157,6 @@ QString ItemBase::family() {
 	return modelPart()->family();
 }
 
-QPixmap * ItemBase::getPixmap(QSize size) {
-	return FSvgRenderer::getPixmap(renderer(), size);
-}
-
 FSvgRenderer * ItemBase::fsvgRenderer() const {
 	if (m_fsvgRenderer != nullptr) return m_fsvgRenderer;
 
@@ -2200,67 +2218,6 @@ bool ItemBase::resetRenderer(const QString & svg, QString & newSvg) {
 		delete newRenderer;
 	}
 	return result;
-}
-
-void ItemBase::getPixmaps(QPixmap * & pixmap1, QPixmap * & pixmap2, QPixmap * & pixmap3, bool swappingEnabled, QSize size)
-{
-	pixmap1 = getPixmap(ViewLayer::BreadboardView, swappingEnabled, size);
-	pixmap2 = getPixmap(ViewLayer::SchematicView, swappingEnabled, size);
-	pixmap3 = getPixmap(ViewLayer::PCBView, swappingEnabled, size);
-}
-
-QPixmap * ItemBase::getPixmap(ViewLayer::ViewID vid, bool swappingEnabled, QSize size)
-{
-	ItemBase * vItemBase = nullptr;
-
-	if (viewID() == vid) {
-		if (!isEverVisible()) return nullptr;
-	}
-	else {
-		vItemBase = modelPart()->viewItem(vid);
-		if ((vItemBase != nullptr) && !vItemBase->isEverVisible()) return nullptr;
-	}
-
-	vid = useViewIDForPixmap(vid, swappingEnabled);
-	if (vid == ViewLayer::UnknownView) return nullptr;
-
-	if (viewID() == vid) {
-		return getPixmap(size);
-	}
-
-	if (vItemBase != nullptr) {
-		return vItemBase->getPixmap(size);
-	}
-
-
-	if (!modelPart()->hasViewFor(vid)) return nullptr;
-
-	QString baseName = modelPart()->hasBaseNameFor(vid);
-	if (baseName.isEmpty()) return nullptr;
-
-	QString filename = PartFactory::getSvgFilename(modelPart(), baseName, true, true);
-	if (filename.isEmpty()) {
-		return nullptr;
-	}
-
-	QSvgRenderer renderer(filename);
-
-	auto * pixmap = new QPixmap(size);
-	pixmap->fill(Qt::transparent);
-	QPainter painter(pixmap);
-	// preserve aspect ratio
-	QSize def = renderer.defaultSize();
-	double newW = size.width();
-	double newH = newW * def.height() / def.width();
-	if (newH > size.height()) {
-		newH = size.height();
-		newW = newH * def.width() / def.height();
-	}
-	QRectF bounds((size.width() - newW) / 2.0, (size.height() - newH) / 2.0, newW, newH);
-	renderer.render(&painter, bounds);
-	painter.end();
-
-	return pixmap;
 }
 
 ViewLayer::ViewID ItemBase::useViewIDForPixmap(ViewLayer::ViewID vid, bool)
@@ -2409,11 +2366,9 @@ void ItemBase::createShape(LayerAttributes & layerAttributes) {
 
 	if (!isEverVisible()) return;
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(layerAttributes.loaded(), &errorStr, &errorLine, &errorColumn)) {
+	auto parseResult = doc.setContent(layerAttributes.loaded());
+	if (!parseResult) {
 		return;
 	}
 

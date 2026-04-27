@@ -30,7 +30,8 @@ LIBGIT2LIB = $$LIBGITPATH/lib
 
 win32 {
 	if ($$LIBGIT_STATIC) {
-		LIBGIT2INCLUDE = "$$_PRO_FILE_PWD_/../libgit2/include"
+		LIBGIT2INCLUDE = "$$LIBGITPATH/include"
+		LIBGIT2LIB = "$$LIBGITPATH/lib"
 
 		exists($$LIBGIT2INCLUDE/git2.h) {
 			message("found libgit2 include path at $$LIBGIT2INCLUDE")

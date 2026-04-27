@@ -49,6 +49,9 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "utils/fmessagebox.h"
 
 #include <QApplication>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QScrollBar>
 #include <QDialog>
 #include <QRadioButton>
@@ -553,7 +556,12 @@ void PCBSketchWidget::getLabelFont(QFont & font, QColor & color, ItemBase * item
 		if (itemBase->viewLayerPlacement() == ViewLayer::NewBottom) name = ViewLayer::Silkscreen0Color;
 	}
 
+	// Add backwards compatibility for versions of Qt previous to 6.4
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+	color = QColor::fromString(name);
+	#else
 	color.setNamedColor(name);
+	#endif
 
 }
 
@@ -2223,6 +2231,27 @@ void PCBSketchWidget::setGroundFillSeeds(const QString & intro)
 {
 	QList<ConnectorItem *> seeds;
 	collectGroundFillSeeds(seeds, true);
+
+	if (DebugDialog::enabled()) {
+		QJsonArray seedsJson;
+		for (int i = 0; i < seeds.count(); i++) {
+			ConnectorItem * ci = seeds.at(i);
+			ItemBase * attachedTo = ci->attachedTo();
+
+			QJsonObject seedObj;
+			seedObj["partID"] = attachedTo ? QString::number(attachedTo->id()) : "null";
+			seedObj["connectorID"] = ci->connectorSharedID();
+			seedObj["activated"] = ci->isGroundFillSeed();
+			seedObj["partTitle"] = attachedTo ? attachedTo->title() : "null";
+
+			seedsJson.append(seedObj);
+		}
+
+		QJsonDocument doc(seedsJson);
+		QString jsonString = doc.toJson(QJsonDocument::Compact);
+		DebugDialog::debug("GROUND_FILL_SEEDS_DATA " + jsonString);
+	}
+
 	GroundFillSeedDialog gfsd(this, seeds, intro, nullptr);
 	int result = gfsd.exec();
 	if (result == QDialog::Accepted) {

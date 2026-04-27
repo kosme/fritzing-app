@@ -34,7 +34,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 QString Version::m_majorVersion("1");
 QString Version::m_minorVersion("0");
-QString Version::m_minorSubVersion("6");
+QString Version::m_minorSubVersion("7");
 QString Version::m_modifier("");
 QString Version::m_gitVersion(GIT_VERSION);
 QString Version::m_gitDate(GIT_DATE);  // want standard ISO form
@@ -104,6 +104,10 @@ const QString & Version::shortDate() {
 
 const QString & Version::year() {
 	return m_year;
+}
+
+QString Version::shortVersion() {
+	return QString("%1.%2.%3").arg(m_majorVersion, m_minorVersion, m_minorSubVersion);
 }
 
 bool Version::candidateGreaterThanCurrent(const VersionThing & candidateVersionThing)

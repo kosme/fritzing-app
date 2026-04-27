@@ -258,13 +258,23 @@ bool S2S::onefzp(QString & fzpFilePath, QString & schematicFilePath) {
 	QFile file(fzpFilePath);
 	file.open(QIODevice::ReadOnly);
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument dom;
-	if (!dom.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		message(tr("Failed loading '%1', %2 line:%3 col:%4").arg(fzpFilePath, errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = dom.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = dom.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		message(tr("Failed loading '%1', %2 line:%3 col:%4")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(fzpFilePath, parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(fzpFilePath, errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return false;
 	}
 
@@ -793,15 +803,25 @@ bool S2S::ensureTerminalPoints(const QString & fzpFilePath, const QString & svgF
 		return false;
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QFile file(svgFilePath);
 	file.open(QIODevice::ReadOnly);
 	QDomDocument dom;
-	if (!dom.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		message(tr("Failed loading schematic '%1', %2 line:%3 col:%4").arg(svgFilePath).arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = dom.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = dom.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		message(tr("Failed loading schematic '%1', %2 line:%3 col:%4").arg(svgFilePath)
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return false;
 	}
 

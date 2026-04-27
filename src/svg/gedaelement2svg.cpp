@@ -527,12 +527,22 @@ QString GedaElement2Svg::makeCopper(QStringList ids, QMultiHash<QString, QString
 			xml.append(string);
 		}
 		xml.append("</g>");
-		QString errorStr;
-		int errorLine;
-		int errorColumn;
 		QDomDocument doc;
-		if (!doc.setContent(xml, &errorStr, &errorLine, &errorColumn)) {
-			throw QObject::tr("Unable to parse copper: %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn);
+		// Add backwards compatibility for versions of Qt previous to 6.5
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		QDomDocument::ParseResult parseResult = doc.setContent(xml);
+		#else
+		QString errorStr;
+		int errorLine, errorColumn;
+		bool parseResult = doc.setContent(xml, &errorStr, &errorLine, &errorColumn);
+		#endif
+		if (!parseResult) {
+			throw QObject::tr("Unable to parse copper: %1 %2 %3")
+			#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+			.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn);
+			#else
+			.arg(errorStr).arg(errorLine).arg(errorColumn);
+			#endif
 		}
 		QDomElement root = doc.documentElement();
 		QDomElement child = root.firstChildElement();

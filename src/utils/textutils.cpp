@@ -71,10 +71,8 @@ static const QString fontFamilyQuotesPattern = R"x(font-family(?:="|:)('[^']*')"
 static const QRegularExpression HexExpr("&#x[0-9a-fA-F];");   // &#x9; &#xa; &#xd;
 static const QRegularExpression Xmlns("xmlns=([\"|'])[^\"']*\\1");
 
-const char16_t TextUtils::MicroSymbolCode = 181;
-const QString TextUtils::MicroSymbol = QString::fromUtf16(&MicroSymbolCode, 1);
-const char16_t TextUtils::AltMicroSymbolCode = 956;
-const QString TextUtils::AltMicroSymbol = QString::fromUtf16(&AltMicroSymbolCode, 1);
+const QString TextUtils::MicroSymbol = QString(QChar(MicroSymbolCode));
+const QString TextUtils::AltMicroSymbol = QString(QChar(AltMicroSymbolCode));
 
 const QString TextUtils::AdobeIllustratorIdentifier = "Generator: Adobe Illustrator";
 
@@ -348,11 +346,9 @@ bool TextUtils::squashElement(QDomDocument & doc, const QString & elementName, c
 }
 
 QString TextUtils::replaceTextElement(const QString & svg, const QString & id, const QString & newValue) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) return svg;
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) return svg;
 
 	QDomElement root = doc.documentElement();
 	QDomNodeList domNodeList = root.elementsByTagName("text");
@@ -370,11 +366,9 @@ QString TextUtils::replaceTextElement(const QString & svg, const QString & id, c
 }
 
 QByteArray TextUtils::replaceTextElement(const QByteArray & svg, const QString & id, const QString & newValue) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) return svg;
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) return svg;
 
 	QDomElement root = doc.documentElement();
 	QDomNodeList domNodeList = root.elementsByTagName("text");
@@ -392,11 +386,9 @@ QByteArray TextUtils::replaceTextElement(const QByteArray & svg, const QString &
 }
 
 QString TextUtils::replaceTextElements(const QString & svg, const QHash<QString, QString> & hash) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) return svg;
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) return svg;
 
 	bool changed = false;
 	QDomElement root = doc.documentElement();
@@ -447,15 +439,18 @@ void TextUtils::replaceChildText(QDomNode & node, const QString & text) {
 
 bool TextUtils::mergeSvg(QDomDocument & doc1, const QString & svg, const QString & id)
 {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	if (doc1.isNull()) {
-		return doc1.setContent(svg, &errorStr, &errorLine, &errorColumn);
+		auto parseResult = doc1.setContent(svg);
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		return parseResult.operator bool();
+		#else
+		return parseResult;
+		#endif
 	}
 
 	QDomDocument doc2;
-	if (!doc2.setContent(svg, &errorStr, &errorLine, &errorColumn)) return false;
+	auto parseResult = doc2.setContent(svg);
+	if (!parseResult) return false;
 
 	QDomElement root1 = doc1.documentElement();
 	if (root1.tagName() != "svg") return false;
@@ -587,25 +582,6 @@ bool TextUtils::cleanSodipodi(QString &content)
 		return true;
 	}
 	return false;
-
-
-	/*
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	QDomDocument doc;
-	bool result = doc.setContent(bytes, &errorStr, &errorLine, &errorColumn);
-	m_svgXml.clear();
-	if (!result) {
-		return false;
-	}
-
-	SvgFlattener flattener;
-	QDomElement root = doc.documentElement();
-	flattener.flattenChildren(root);
-	SvgFileSplitter::fixStyleAttributeRecurse(root);
-	return doc.toByteArray();
-	*/
 }
 
 bool TextUtils::fixPixelDimensionsIn(QString &fileContent) {
@@ -614,10 +590,12 @@ bool TextUtils::fixPixelDimensionsIn(QString &fileContent) {
 
 	QDomDocument svgDom;
 
-	QString errorMsg;
-	int errorLine;
-	int errorCol;
-	if(!svgDom.setContent(fileContent, true, &errorMsg, &errorLine, &errorCol)) {
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = svgDom.setContent(fileContent, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = svgDom.setContent(fileContent, true);
+	#endif
+	if(!parseResult) {
 		return false;
 	}
 
@@ -763,7 +741,7 @@ QString TextUtils::convertExtendedChars(const QString & str)
 			result.append(c);
 		}
 		else {
-			result.append(QString("&#x%1;").arg(c.unicode(), 0, 16));
+			result.append("&#x" + QString::number(c.unicode(), 16) + ";");
 		}
 	}
 
@@ -807,13 +785,10 @@ QString TextUtils::stripNonValidXMLCharacters(const QString & str)
 }
 
 bool TextUtils::addCopper1(const QString & filename, QDomDocument & domDocument, const QString & srcAtt, const QString & destAtt) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QFile file(filename);
 	file.open(QIODevice::ReadOnly);
-	bool result = domDocument.setContent(&file, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
+	auto parseResult = domDocument.setContent(&file);
+	if (!parseResult) {
 		domDocument.clear();			// probably redundant
 		return false;
 	}
@@ -833,7 +808,7 @@ bool TextUtils::addCopper1(const QString & filename, QDomDocument & domDocument,
 		}
 	}
 
-	result = false;
+	bool result = false;
 	for (int i = 0; i < elements.count(); i++) {
 		QDomElement node = elements.at(i);
 		if (node.isNull()) continue;
@@ -1088,10 +1063,12 @@ bool TextUtils::fixMuch(QString &svg, bool fixStrokeWidthFlag)
 	result |= fixInternalUnits(svg);
 
 	QDomDocument svgDom;
-	QString errorMsg;
-	int errorLine;
-	int errorCol;
-	if(!svgDom.setContent(svg, true, &errorMsg, &errorLine, &errorCol)) {
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = svgDom.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = svgDom.setContent(svg, true);
+	#endif
+	if(!parseResult) {
 		return result;
 	}
 
@@ -1930,11 +1907,8 @@ QString TextUtils::getMacAddress()
 QString TextUtils::expandAndFill(const QString & svg, const QString & color, double expandBy)
 {
 	QDomDocument domDocument;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = domDocument.setContent(svg, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
+	auto parseResult = domDocument.setContent(svg);
+	if (!parseResult) {
 		return "";
 	}
 

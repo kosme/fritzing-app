@@ -410,10 +410,8 @@ bool DRC::startAux(QString & message, QStringList & messages, QList<CollidingThi
 		auto * masterDoc = new QDomDocument();
 		m_masterDocs.insert(viewLayerPlacement, masterDoc);
 
-		QString errorStr;
-		int errorLine;
-		int errorColumn;
-		if (!masterDoc->setContent(master, &errorStr, &errorLine, &errorColumn)) {
+		auto parseResult = masterDoc->setContent(master);
+		if (!parseResult) {
 			message = tr("Unexpected SVG rendering failure--contact fritzing.org");
 			return false;
 		}
@@ -1074,11 +1072,27 @@ void DRC::checkCopperBoth(QStringList & messages, QList<CollidingThing *> & coll
 		file2.close();
 
 		QDomDocument doc;
+		// Add backwards compatibility for versions of Qt previous to 6.5
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		QDomDocument::ParseResult parseResult = doc.setContent(svg);
+		#else
 		QString errorStr;
-		auto errorLine = 0;
-		auto errorColumn = 0;
-		if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
-			DebugDialog::debug(QString("itembase svg xml failure %1 %2 %3 %4").arg(itemBase->id()).arg(errorStr).arg(errorLine).arg(errorColumn));
+		int errorLine, errorColumn;
+		bool parseResult = doc.setContent(svg, &errorStr, &errorLine, &errorColumn);
+		#endif
+		if (!parseResult) {
+			DebugDialog::debug(QString("itembase svg xml failure %1 %2 %3 %4")
+				.arg(itemBase->id())
+				#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+				.arg(parseResult.errorMessage)
+				.arg(parseResult.errorLine)
+				.arg(parseResult.errorColumn)
+				#else
+				.arg(errorStr)
+				.arg(errorLine)
+				.arg(errorColumn)
+				#endif
+				);
 			continue;
 		}
 

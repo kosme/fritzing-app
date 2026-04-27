@@ -62,7 +62,12 @@ bool RatsnestColor::m_isTestingEnabled = false;
 RatsnestColor::RatsnestColor(const QDomElement & color) {
 	m_name = color.attribute("name");
 	//DebugDialog::debug("color name " + m_name);
+	// Add backwards compatibility for versions of Qt previous to 6.4
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+	m_ratsnest = QColor::fromString(color.attribute("ratsnest"));
+	#else
 	m_ratsnest.setNamedColor(color.attribute("ratsnest"));
+	#endif
 	m_wire = color.attribute("wire");
 	m_shadow = color.attribute("shadow");
 	QDomElement connector = color.firstChildElement("connector");
@@ -104,7 +109,12 @@ bool RatsnestColor::matchColor(const QString & string) {
 RatsnestColors::RatsnestColors(const QDomElement & view)
 {
 	m_viewID = ViewLayer::idFromXmlName(view.attribute("name"));
+	// Add backwards compatibility for versions of Qt previous to 6.4
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+	m_backgroundColor = QColor::fromString(view.attribute("background"));
+	#else
 	m_backgroundColor.setNamedColor(view.attribute("background"));
+	#endif
 	m_index = 0;
 	QDomElement color = view.firstChildElement("color");
 	while (!color.isNull()) {
@@ -134,12 +144,15 @@ void RatsnestColors::initNames() {
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug("Unable to open :/resources/ratsnestcolors.xml");
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
 
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = domDocument.setContent(&file, true);
+	#endif
+	if (!parseResult) {
 		return;
 	}
 

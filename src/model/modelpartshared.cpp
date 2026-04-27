@@ -399,11 +399,8 @@ void ModelPartShared::initConnectors() {
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(pathToUse));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	doc.setContent(&file, &errorStr, &errorLine, &errorColumn);
+	doc.setContent(&file);
 
 	m_connectorsInitialized = true;
 

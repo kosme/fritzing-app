@@ -1534,8 +1534,10 @@ void MainWindow::createPartMenu() {
 	m_partMenu->addAction(m_dumpAllPartsAction);
 #endif
 
-	m_partMenu->addSeparator();
-	m_partMenu->addAction(m_regeneratePartsDatabaseAct);
+	if (DebugDialog::enabled()) {
+		m_partMenu->addSeparator();
+		m_partMenu->addAction(m_regeneratePartsDatabaseAct);
+	}
 }
 
 void MainWindow::createViewMenu()
@@ -2014,7 +2016,7 @@ void MainWindow::updatePartMenu() {
 	m_swapObsoleteAct->setEnabled(itemCount.obsoleteCount > 0);
 
 	m_findPartInSketchAct->setEnabled(m_currentGraphicsView);
-	m_regeneratePartsDatabaseAct->setEnabled(true);
+	m_regeneratePartsDatabaseAct->setEnabled(DebugDialog::enabled());
 	m_openProgramWindowAct->setEnabled(true);
 }
 
@@ -3790,8 +3792,13 @@ void MainWindow::loadedViewsSlot(ModelBase *, QDomElement & views) {
 			}
 			sketchWidget->setAutorouterSettings(autorouterSettings);
 
+			// Add backwards compatibility for versions of Qt previous to 6.4
+			#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+			QColor color = QColor::fromString(colorName);
+			#else
 			QColor color;
 			color.setNamedColor(colorName);
+			#endif
 
 			bool redraw = false;
 			if (color.isValid()) {

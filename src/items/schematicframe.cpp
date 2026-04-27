@@ -113,12 +113,14 @@ void SchematicFrame::loadTemplate(const QString & tPath, const QString & fPath, 
 	templateThing.svgTemplate = file.readAll();
 	file.close();
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
-	if (!domDocument.setContent(templateThing.svgTemplate, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(templateThing.svgTemplate, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = domDocument.setContent(templateThing.svgTemplate, true);
+	#endif
+	if (!parseResult) {
 		return;
 	}
 

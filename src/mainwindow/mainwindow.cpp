@@ -41,6 +41,9 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QStyleFactory>
 
 
+#include <QSaveFile>
+#include <quazip/quazipfile.h>
+
 #include "mainwindow.h"
 #include "../debugdialog.h"
 #include "../infoview/htmlinfoview.h"
@@ -79,6 +82,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../mainwindow/FProbeKeyPressEvents.h"
 #include "../mainwindow/fprobefocuswidget.h"
 #include "FProbeCurrentSketchXml.h"
+#include "partsbinpalette/FProbeBin.h"
 #include "model/fzpinfo.h"
 #include "connectors/debugconnectors.h"
 #include "connectors/debugconnectorsprobe.h"
@@ -217,24 +221,6 @@ void FTabBar::drawTab(QStylePainter & p, QStyleOptionTabV3 & tabV3, int index)
 
 }
 */
-
-///////////////////////////////////////////////
-
-struct MissingSvgInfo {
-	QString requestedPath;
-	QStringList connectorSvgIds;
-	ModelPart * modelPart;
-	bool equal;
-};
-
-bool byConnectorCount(MissingSvgInfo & m1, MissingSvgInfo & m2)
-{
-	if (m1.connectorSvgIds.count() == m2.connectorSvgIds.count() && m1.modelPart != m2.modelPart) {
-		m1.equal = m2.equal = true;
-	}
-
-	return (m1.connectorSvgIds.count() > m2.connectorSvgIds.count());
-}
 
 ///////////////////////////////////////////////
 
@@ -539,6 +525,8 @@ void MainWindow::init(ReferenceModel *referenceModel, bool lockFiles) {
 	m_debugConnectors = new DebugConnectors(m_breadboardGraphicsView, m_schematicGraphicsView, m_pcbGraphicsView);
 #endif
 	new DebugConnectorsProbe(m_breadboardGraphicsView, m_schematicGraphicsView, m_pcbGraphicsView);
+
+	new FProbeBin(m_binManager);
 
 	m_projectProperties = QSharedPointer<ProjectProperties>(new ProjectProperties());
 	m_serviceListFetcher = QSharedPointer<ServiceListFetcher>(new ServiceListFetcher());
@@ -1144,13 +1132,13 @@ QWidget *MainWindow::createSimulationButton(SketchAreaWidget *parent) {
 	stopSimulationButton->setIcon(QIcon(QPixmap(":/resources/images/icons/toolbarStopSimulationEnabled_icon.png")));
 	widget->addWidget(stopSimulationButton);
 
-	connect(normalModeAct, &QAction::triggered, this, [=]() {
+	connect(normalModeAct, &QAction::triggered, this, [this]() {
 		m_simulator->enableTransientSimulation(false);
 	});
-	connect(transientModeAct, &QAction::triggered, this, [=]() {
+	connect(transientModeAct, &QAction::triggered, this, [this]() {
 		m_simulator->enableTransientSimulation(true);
 	});
-	connect(transientModeAct, &QAction::triggered, this, [=]() {
+	connect(transientModeAct, &QAction::triggered, this, [this]() {
 		m_simulator->enableTransientSimulation(true);
 		FMessageBox::warning(
 					this,
@@ -1607,9 +1595,7 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 	QFileInfoList svgEntryInfoList = dir.entryInfoList(namefilters);
 
 	m_addedToTemp = false;
-
-	QList<MissingSvgInfo> missing;
-	QList<ModelPart *> missingModelParts;
+	QStringList missingSvgPaths;
 
 	Q_FOREACH (QFileInfo fzpInfo, entryInfoList) {
 		QFile file(dir.absoluteFilePath(fzpInfo.fileName()));
@@ -1633,20 +1619,36 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 		ModelPart * mp = m_referenceModel->retrieveModelPart(moduleID);
 		if (mp == nullptr) {
 			QDomDocument doc;
+			// Add backwards compatibility for versions of Qt previous to 6.5
+			#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+			QDomDocument::ParseResult parseResult = doc.setContent(fzp);
+			#else
 			QString errorStr;
-			int errorLine;
-			int errorColumn;
-			if (!doc.setContent(fzp, &errorStr, &errorLine, &errorColumn)) {
-				DebugDialog::debug(QString("unable to parse fzp in %1. line: %2 column: %3 error: %4 fzp: %5").arg(file.fileName()).arg(errorLine).arg(errorColumn).arg(errorStr).arg(fzp));
+			int errorLine, errorColumn;
+			bool parseResult = doc.setContent(fzp, &errorStr, &errorLine, &errorColumn);
+			#endif
+			if (!parseResult) {
+				DebugDialog::debug(QString("unable to parse fzp in %1. line: %2 column: %3 error: %4 fzp: %5").arg(file.fileName())
+				#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+				.arg(parseResult.errorLine).arg(parseResult.errorColumn).arg(parseResult.errorMessage)
+				#else
+				.arg(errorLine).arg(errorColumn).arg(errorStr)
+				#endif
+				.arg(fzp));
 				FMessageBox::warning(
 				    this,
 				    tr("Fritzing"),
-				    tr("unable to parse fzp in %1. line: %2 column: %3 error: %4").arg(file.fileName()).arg(errorLine).arg(errorColumn).arg(errorStr)
+				    tr("unable to parse fzp in %1. line: %2 column: %3 error: %4")
+					#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+					.arg(file.fileName()).arg(parseResult.errorLine).arg(parseResult.errorColumn).arg(parseResult.errorMessage)
+					#else
+					.arg(file.fileName()).arg(errorLine).arg(errorColumn).arg(errorStr)
+					#endif
 				);
 				continue;
 			}
 
-			mp = copyToPartsFolder(fzpInfo, false, PartFactory::folderPath(), "contrib");
+			mp = copyToPartsFolder(fzpInfo, false, PartFactory::folderPath(), "contrib", moduleID);
 			if (mp == nullptr) {
 				DebugDialog::debug(QString("unable to create model part in %1: %2").arg(file.fileName()).arg(fzp));
 				continue;
@@ -1659,26 +1661,11 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 				QDomElement layers = view.firstChildElement("layers");
 				QString path = layers.attribute("image", "");
 				if (!path.isEmpty()) {
-					bool copied = copySvg(path, svgEntryInfoList);
+					bool copied = copySvg(path, svgEntryInfoList, moduleID);
 					if (!copied) {
-						DebugDialog::debug(QString("missing svg %1").arg(path));
-						MissingSvgInfo msi;
-						msi.equal = false;
-						msi.modelPart = mp;
-						missingModelParts << mp;
-						msi.requestedPath = path;
-						ViewLayer::ViewID viewID = ViewLayer::idFromXmlName(view.tagName());
-						QDomElement connectors = root.firstChildElement("connectors");
-						QDomElement connector = connectors.firstChildElement("connector");
-						while (!connector.isNull()) {
-							QString id, terminalID;
-							ViewLayer::getConnectorSvgIDs(connector, viewID, id, terminalID);
-							if (!id.isEmpty()) {
-								msi.connectorSvgIds.append(id);
-							}
-							connector = connector.nextSiblingElement("connector");
+						if (!missingSvgPaths.contains(path)) {
+							missingSvgPaths << path;
 						}
-						missing << msi;
 					}
 				}
 				view = view.nextSiblingElement();
@@ -1687,68 +1674,21 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 			mp->setFzz(true);
 		}
 
-		if (!missingModelParts.contains(mp)) {
-			m_binManager->addToTempPartsBin(mp);
-			m_addedToTemp = true;
-		}
-	}
-
-	std::sort(missing.begin(), missing.end(), byConnectorCount);
-	Q_FOREACH (MissingSvgInfo msi, missing) {
-		if (msi.equal) {
-			// two or more parts have the same number of connectors--so we can't figure out how to assign them
-			continue;
-		}
-
-		int slash = msi.requestedPath.indexOf("/");
-		QString suffix = msi.requestedPath.mid(slash + 1);
-		QString prefix = msi.requestedPath.left(slash);
-		for (int jx = svgEntryInfoList.count() - 1; jx >= 0; jx--) {
-			QFileInfo svgInfo = svgEntryInfoList.at(jx);
-			if (!svgInfo.fileName().contains(prefix, Qt::CaseInsensitive)) continue;
-
-			QFile svgfile(svgInfo.absoluteFilePath());
-			if (!svgfile.open(QIODevice::ReadOnly)) {
-				DebugDialog::debug(QString("Unable to open :%1").arg(svgInfo.absoluteFilePath()));
-			}
-			QDomDocument svgDoc;
-			if (!svgDoc.setContent(&svgfile)) continue;
-
-			QList<QDomElement> elements;
-			QDomElement root = svgDoc.documentElement();
-			TextUtils::findElementsWithAttribute(root, "id", elements);
-			if (elements.count() < msi.connectorSvgIds.count()) continue;
-
-			QStringList ids;
-			Q_FOREACH (QDomElement element, elements) {
-				ids << element.attribute("id");
-			}
-
-			bool allGood = true;
-			Q_FOREACH (QString id, msi.connectorSvgIds) {
-				if (!ids.contains(id)) {
-					allGood = false;
-					break;
-				}
-			}
-
-			if (!allGood) continue;
-
-			QString destPath = copyToSvgFolder(svgInfo, false, PartFactory::folderPath(), "contrib");   // copy file with original name
-			if (!destPath.isEmpty()) {
-				QFileInfo destInfo(destPath);
-				QFile file(destPath);
-				DebugDialog::debug(QString("found missing %1").arg(destPath));
-				FolderUtils::slamCopy(file, destInfo.absoluteDir().absoluteFilePath(suffix));         // make another copy that has the name used in the fzp file
-				svgEntryInfoList.removeAt(jx);
-				break;
-			}
-		}
-	}
-
-	Q_FOREACH (ModelPart * mp, missingModelParts) {
 		m_binManager->addToTempPartsBin(mp);
 		m_addedToTemp = true;
+	}
+
+	if (!missingSvgPaths.isEmpty()) {
+		FMessageBox::warning(
+			this,
+			tr("Fritzing"),
+			tr("The sketch '%1' is missing %n SVG file(s): %2. "
+			   "The sketch will still load, but some parts may not display correctly. "
+			   "If the sketch is very old, try loading it with an older version of Fritzing (0.9.x) and re-saving it.",
+			   nullptr, missingSvgPaths.count())
+			.arg(fileName)
+			.arg(missingSvgPaths.join(", "))
+		);
 	}
 
 	if (!m_addedToTemp) {
@@ -1764,7 +1704,7 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 	return "";
 }
 
-bool MainWindow::copySvg(const QString & path, QFileInfoList & svgEntryInfoList)
+bool MainWindow::copySvg(const QString & path, QFileInfoList & svgEntryInfoList, const QString &moduleID)
 {
 	int slash = path.indexOf("/");
 	QString subpath = path.mid(slash + 1);
@@ -1772,51 +1712,17 @@ bool MainWindow::copySvg(const QString & path, QFileInfoList & svgEntryInfoList)
 	for (int jx = svgEntryInfoList.count() - 1; jx >= 0; jx--) {
 		QFileInfo svgInfo = svgEntryInfoList.at(jx);
 		if (svgInfo.fileName().contains(subpath)) {
-			copyToSvgFolder(svgInfo, false, PartFactory::folderPath(), "contrib");
-			svgEntryInfoList.removeAt(jx);
-			// jrc 30 oct 2012: not sure why we can't just return at this point--can there be other matching files?
+			copyToSvgFolder(svgInfo, false, PartFactory::folderPath(), "contrib", moduleID);
+			// Don't remove from svgEntryInfoList — multiple fzps in the
+			// same .fzz may reference the same SVG files.
 			gotOne = true;
 		}
 	}
 
-	if (gotOne) return true;
-
-	// deal with a bug in which all the svg files exist in the fzz but the fz file points to the wrong name
-	// most of the time it's just a GUID difference
-
-	DebugDialog::debug(QString("svg matching fz path %1 not found").arg(path));
-	QRegularExpressionMatch match;
-	int guidix = subpath.lastIndexOf(GuidMatcher, -1, &match);
-	if (guidix < 0) return false;
-
-	QString originalGuid = match.captured(0);
-	QString tryPath = subpath;
-	tryPath.replace(guidix, originalGuid.length(), "%%%%");
-	for (int jx = svgEntryInfoList.count() - 1; jx >= 0; jx--) {
-		QFileInfo svgInfo = svgEntryInfoList.at(jx);
-		QString tempPath = svgInfo.fileName();
-		QRegularExpressionMatch match;
-		guidix = tempPath.lastIndexOf(GuidMatcher, -1, &match);
-		if (guidix < 0) continue;
-
-		tempPath.replace(guidix, match.captured(0).length(), "%%%%");
-		if (!tempPath.contains(tryPath)) continue;
-
-		QString destPath = copyToSvgFolder(svgInfo, false, PartFactory::folderPath(), "contrib");
-		if (!destPath.isEmpty()) {
-			QFile file(destPath);
-			match = QRegularExpressionMatch();
-			guidix = destPath.lastIndexOf(GuidMatcher, -1, &match);
-			destPath.replace(guidix, match.captured(0).length(), originalGuid);
-			FolderUtils::slamCopy(file, destPath);
-			DebugDialog::debug(QString("found matching svg %1").arg(destPath));
-			svgEntryInfoList.removeAt(jx);
-			return true;
-		}
+	if (!gotOne) {
+		DebugDialog::debug(QString("svg matching fz path %1 not found").arg(path));
 	}
-
-	return false;
-
+	return gotOne;
 }
 
 
@@ -1841,7 +1747,7 @@ bool MainWindow::loadBundledNonAtomicEntity(const QString &fileName, Bundler* bu
 	QDir unzipDir(unzipDirPath);
 
 	if (bundler->preloadBundledAux(unzipDir, dontAsk)) {
-		QList<ModelPart*> mps = moveToPartsFolder(unzipDir, addToBin, true, FolderUtils::getUserPartsPath(), "contrib", false);
+		QList<ModelPart*> mps = moveToPartsFolder(unzipDir, addToBin, true, FolderUtils::getLocalPartsPath(), "contrib", false);
 		// the bundled itself
 		bundler->loadBundledAux(unzipDir,mps);
 	}
@@ -1945,7 +1851,7 @@ QList<ModelPart*> MainWindow::loadPart(const QString &fzpFile, bool addToBin) {
 
 
 	try {
-		mps = moveToPartsFolder(tmpDir, addToBin, true, FolderUtils::getUserPartsPath(), "user", true);
+		mps = moveToPartsFolder(tmpDir, addToBin, true, FolderUtils::getLocalPartsPath(), "user", true);
 	}
 	catch (const QString & msg) {
 		FMessageBox::warning(
@@ -1991,7 +1897,7 @@ QList<ModelPart*> MainWindow::loadBundledPart(const QString &fileName, bool addT
 
 	QList<ModelPart*> mps;
 	try {
-		mps = moveToPartsFolder(unzipDir, addToBin, true, FolderUtils::getUserPartsPath(), "user", true);
+		mps = moveToPartsFolder(unzipDir, addToBin, true, FolderUtils::getLocalPartsPath(), "user", true);
 	}
 	catch (const QString & msg) {
 		FMessageBox::warning(
@@ -2114,6 +2020,180 @@ QStringList MainWindow::saveBundledAux(ModelPart *mp, const QDir &destFolder) {
 	return names;
 }
 
+bool MainWindow::writeFileToZip(QuaZip *zip, const QString &filePath, const QString &fileNameInZip) {
+	QFile inFile(filePath);
+	if (!inFile.open(QIODevice::ReadOnly)) {
+		DebugDialog::debug(QString("writeFileToZip: cannot open '%1': %2")
+			.arg(filePath, inFile.errorString()));
+		return false;
+	}
+	QByteArray data = inFile.readAll();
+	inFile.close();
+
+	QuaZipFile zipFile(zip);
+	if (!zipFile.open(QIODevice::WriteOnly, QuaZipNewInfo(fileNameInZip))) {
+		DebugDialog::debug(QString("writeFileToZip: cannot create zip entry '%1', error %2")
+			.arg(fileNameInZip).arg(zipFile.getZipError()));
+		return false;
+	}
+	zipFile.write(data);
+	zipFile.close();
+	if (zipFile.getZipError() != UNZ_OK) {
+		DebugDialog::debug(QString("writeFileToZip: zip entry close error %1").arg(zipFile.getZipError()));
+		return false;
+	}
+	return true;
+}
+
+int MainWindow::writePartToZip(QuaZip *zip, ModelPart *mp) {
+	int entriesWritten = 0;
+
+	// Write the .fzp file
+	QString partPath = mp->path();
+	QString fzpEntryName = ZIP_PART + QFileInfo(partPath).fileName();
+	if (!writeFileToZip(zip, partPath, fzpEntryName)) {
+		return -1;
+	}
+	entriesWritten++;
+
+	// Write SVG files for each view
+	QList<ViewLayer::ViewID> viewIDs;
+	viewIDs << ViewLayer::IconView << ViewLayer::BreadboardView
+	        << ViewLayer::SchematicView << ViewLayer::PCBView;
+	for (ViewLayer::ViewID viewID : viewIDs) {
+		QString basename = mp->hasBaseNameFor(viewID);
+		if (basename.isEmpty()) continue;
+
+		QString filename = PartFactory::getSvgFilename(mp, basename, true, true);
+		if (filename.isEmpty()) continue;
+
+		QString svgBasename = basename;
+		svgBasename.replace("/", ".");
+		QString svgEntryName = ZIP_SVG + svgBasename;
+		if (!writeFileToZip(zip, filename, svgEntryName)) {
+			return -1;
+		}
+		entriesWritten++;
+	}
+
+	return entriesWritten;
+}
+
+bool MainWindow::saveBundleDirectly(const QString &bundledFileName) {
+	m_programView->saveAll();
+
+	QSaveFile saveFile(bundledFileName);
+	if (!saveFile.open(QIODevice::WriteOnly)) {
+		FMessageBox::warning(
+			this,
+			tr("Fritzing"),
+			tr("Cannot open file '%1' for writing.\n\n%2")
+				.arg(bundledFileName, saveFile.errorString()));
+		return false;
+	}
+
+	QuaZip zip(&saveFile);
+	zip.setAutoClose(false);  // We control commit() ourselves
+	if (!zip.open(QuaZip::mdCreate)) {
+		FMessageBox::warning(
+			this,
+			tr("Fritzing"),
+			tr("Cannot create ZIP archive for '%1'.\n\n%2")
+				.arg(bundledFileName, saveFile.errorString()));
+		return false;
+	}
+
+	int entriesWritten = 0;
+
+	// 1. Write sketch XML entry
+	QString saveError;
+	if (!m_sketchModel->saveToZip(&zip, bundledFileName, false, &saveError)) {
+		FMessageBox::warning(
+			this,
+			tr("Fritzing"),
+			tr("Failed to write sketch data to '%1'.\n\n%2")
+				.arg(bundledFileName, saveError));
+		return false;
+	}
+	entriesWritten++;
+
+	// 2. Write linked program files (non-fatal if missing)
+	for (int i = 0; i < m_linkedProgramFiles.count(); i++) {
+		LinkedFile *linkedFile = m_linkedProgramFiles.at(i);
+		QFileInfo fileInfo(linkedFile->linkedFilename);
+		if (fileInfo.exists()) {
+			writeFileToZip(&zip, linkedFile->linkedFilename, fileInfo.fileName());
+			entriesWritten++;
+		}
+	}
+
+	// 3. Collect and write non-core parts
+	QHash<QString, ModelPart *> saveParts;
+	for (QGraphicsItem *item : m_pcbGraphicsView->scene()->items()) {
+		auto *itemBase = dynamic_cast<ItemBase *>(item);
+		if (itemBase == nullptr) continue;
+		if (itemBase->modelPart() == nullptr) continue;
+		if (itemBase->modelPart()->isCore()) continue;
+		if (itemBase->moduleID().contains(PartFactory::OldSchematicPrefix)) continue;
+		saveParts.insert(itemBase->moduleID(), itemBase->modelPart());
+	}
+
+	for (ModelPart *mp : saveParts.values()) {
+		int partEntries = writePartToZip(&zip, mp);
+		if (partEntries < 0) {
+			QString devError = saveFile.errorString();
+			if (saveFile.error() == QFileDevice::NoError)
+				devError = QString("zip error writing part files");
+			FMessageBox::warning(
+				this,
+				tr("Fritzing"),
+				tr("Failed to write part '%1' to '%2'.\n\n%3")
+					.arg(mp->title(), bundledFileName, devError));
+			return false;
+		}
+		entriesWritten += partEntries;
+	}
+
+	// 4. Validate: must have at least the sketch entry
+	if (entriesWritten < 1) {
+		FMessageBox::warning(
+			this,
+			tr("Fritzing"),
+			tr("Save produced an empty archive for '%1'. Save aborted.")
+				.arg(bundledFileName));
+		return false;
+	}
+
+	// 5. Close the ZIP (finalizes central directory) but don't commit yet
+	zip.close();
+	if (zip.getZipError() != UNZ_OK) {
+		QString devError = saveFile.errorString();
+		if (saveFile.error() == QFileDevice::NoError)
+			devError = QString("zip finalization error %1").arg(zip.getZipError());
+		FMessageBox::warning(
+			this,
+			tr("Fritzing"),
+			tr("Error finalizing ZIP archive for '%1'.\n\n%2")
+				.arg(bundledFileName, devError));
+		return false;
+	}
+
+	// 6. Save previous version to history before overwriting
+	FolderUtils::savePreviousVersionToHistory(bundledFileName);
+
+	// 7. Atomic commit — replaces old file or creates new one
+	if (!saveFile.commit()) {
+		FMessageBox::warning(
+			this,
+			tr("Fritzing"),
+			tr("Failed to commit file '%1'. The original file is untouched.\n\n%2")
+				.arg(bundledFileName, saveFile.errorString()));
+		return false;
+	}
+
+	return true;
+}
+
 void MainWindow::validatePartInfo(const QString &fzpPath)
 {
 	FzpInfo info(fzpPath);
@@ -2178,16 +2258,62 @@ QList<ModelPart*> MainWindow::moveToPartsFolder(QDir &unzipDir, bool addToBin, b
 		validatePartInfo(fzpPath);
 	}
 
-	namefilters.clear();
-	namefilters << ZIP_SVG+"*";
-	Q_FOREACH(QFileInfo file, unzipDir.entryInfoList(namefilters)) { // svg files
-		//DebugDialog::debug("unzip svg " + file.absoluteFilePath());
-		copyToSvgFolder(file, addToAlien, prefixFolder, destFolder);
+	// Pre-parse FZPs to build SVG-to-moduleID mapping
+	QMap<QString, QString> svgImageToModuleID;  // "breadboard/filename.svg" -> moduleID
+	QMap<QString, QString> fzpToModuleID;       // fzp filename -> moduleID
+	for (const QFileInfo &fzpInfo : partEntryInfoList) {
+		QFile fzpFile(fzpInfo.absoluteFilePath());
+		if (!fzpFile.open(QFile::ReadOnly)) continue;
+		QString fzpContent = fzpFile.readAll();
+		fzpFile.close();
+		QString moduleID = TextUtils::parseForModuleID(fzpContent);
+		if (moduleID.isEmpty()) continue;
+		fzpToModuleID[fzpInfo.fileName()] = FolderUtils::sanitizeForFolder(moduleID);
+
+		// Parse SVG image references from FZP
+		QDomDocument doc;
+		if (!doc.setContent(fzpContent)) continue;
+		QDomElement views = doc.documentElement().firstChildElement("views");
+		QDomElement view = views.firstChildElement();
+		while (!view.isNull()) {
+			QDomElement layers = view.firstChildElement("layers");
+			QString imagePath = layers.attribute("image", "");
+			if (!imagePath.isEmpty()) {
+				svgImageToModuleID[imagePath] = moduleID;
+			}
+			view = view.nextSiblingElement();
+		}
 	}
 
-	Q_FOREACH(QFileInfo file, partEntryInfoList) { // part files
-		//DebugDialog::debug("unzip part " + file.absoluteFilePath());
-		ModelPart * mp = copyToPartsFolder(file, addToAlien, prefixFolder, destFolder);
+	// Copy SVG files with moduleID subfolder
+	namefilters.clear();
+	namefilters << ZIP_SVG+"*";
+	for (const QFileInfo &file : unzipDir.entryInfoList(namefilters)) {
+		// Reconstruct the image path to look up the moduleID
+		QString stripped = file.fileName();
+		stripped.remove(QRegularExpression("^"+ZIP_SVG));
+		QString viewFolder = stripped.left(stripped.indexOf("."));
+		QString baseName = stripped.mid(viewFolder.length() + 1);
+		QString imagePath = viewFolder + "/" + baseName;
+		QString moduleID = svgImageToModuleID.value(imagePath);
+		if (moduleID.isEmpty()) continue;
+
+		copyToSvgFolder(file, addToAlien, prefixFolder, destFolder, moduleID);
+	}
+
+	// Copy FZP files with moduleID subfolder
+	for (const QFileInfo &file : partEntryInfoList) {
+		QString moduleID = fzpToModuleID.value(file.fileName());
+		if (moduleID.isEmpty()) {
+			if (importingSinglePart) {
+				QString partName = file.fileName();
+				partName.remove(QRegularExpression("^" + ZIP_PART));
+				throw tr("Unable to load part '%1': the part definition has an empty or missing module ID (moduleId attribute).").arg(partName);
+			}
+			DebugDialog::debug(QString("Skipping part with empty module ID: %1").arg(file.fileName()));
+			continue;
+		}
+		ModelPart * mp = copyToPartsFolder(file, addToAlien, prefixFolder, destFolder, moduleID);
 		if (mp) {
 			retval << mp;
 			if (addToBin) {
@@ -2200,16 +2326,21 @@ QList<ModelPart*> MainWindow::moveToPartsFolder(QDir &unzipDir, bool addToBin, b
 	return retval;
 }
 
-QString MainWindow::copyToSvgFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder) {
+QString MainWindow::copyToSvgFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder, const QString &moduleID) {
 	QFile svgfile(file.filePath());
 	// let's make sure that we remove just the suffix
 	QString fileName = file.fileName().remove(QRegularExpression("^"+ZIP_SVG));
 	QString viewFolder = fileName.left(fileName.indexOf("."));
 	fileName.remove(0, viewFolder.length() + 1);
 
-	QString destFilePath =
-	    prefixFolder+"/svg/"+destFolder+"/"+viewFolder+"/"+fileName;
+	QString destFilePath;
+	if (!moduleID.isEmpty()) {
+		destFilePath = prefixFolder+"/"+destFolder+"/"+moduleID+"/"+viewFolder+"/"+fileName;
+	} else {
+		destFilePath = prefixFolder+"/svg/"+destFolder+"/"+viewFolder+"/"+fileName;
+	}
 
+	FolderUtils::ensureDirectoryExists(destFilePath);
 	backupExistingFileIfExists(destFilePath);
 	if(FolderUtils::slamCopy(svgfile, destFilePath)) {
 		if (addToAlien) {
@@ -2221,12 +2352,15 @@ QString MainWindow::copyToSvgFolder(const QFileInfo& file, bool addToAlien, cons
 	return "";
 }
 
-ModelPart* MainWindow::copyToPartsFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder) {
+ModelPart* MainWindow::copyToPartsFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder, const QString &moduleID) {
 	QFile partfile(file.filePath());
 	// let's make sure that we remove just the suffix
-	QString destFilePath =
-	    prefixFolder+"/"+destFolder+"/"+file.fileName().remove(QRegularExpression("^"+ZIP_PART));
+	QString baseName = file.fileName();
+	baseName.remove(QRegularExpression("^"+ZIP_PART));
 
+	QString destFilePath = prefixFolder+"/"+destFolder+"/"+moduleID+"/"+baseName;
+
+	FolderUtils::ensureDirectoryExists(destFilePath);
 	backupExistingFileIfExists(destFilePath);
 	if(FolderUtils::slamCopy(partfile, destFilePath)) {
 		if (addToAlien) {

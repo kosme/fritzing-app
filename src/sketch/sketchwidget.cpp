@@ -56,6 +56,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../debugdialog.h"
 #include "sketchwidget.h"
 #include "outlierhandler.h"
+#include "FProbeScrollPosition.h"
 #include "subpartswapmanager.h"
 #include "../connectors/connectoritem.h"
 #include "../connectors/svgidlayer.h"
@@ -186,6 +187,9 @@ SketchWidget::SketchWidget(ViewLayer::ViewID viewID, QWidget *parent, int size, 
 	
 	// Initialize outlier handler
 	m_outlierHandler = new OutlierHandler(this, this);
+
+	// Initialize scroll position probe for test instrumentation
+	new FProbeScrollPosition(this, ViewLayer::viewIDName(viewID));
 
 	//this->scene()->setSceneRect(0,0, rect().width(), rect().height());
 
@@ -1384,7 +1388,7 @@ long SketchWidget::createWire(ConnectorItem * from, ConnectorItem * to,
 	                   .arg(newID)
 	                   .arg(fromPos.x()).arg(fromPos.y())
 	                   .arg(toPos.x()).arg(toPos.y())
-	                   .arg(wireFlags)
+	                   .arg(QVariant::fromValue(wireFlags).toString())
 	                   .arg(from->attachedToTitle()).arg(from->connectorSharedID())
 	                   .arg(to->attachedToTitle()).arg(to->connectorSharedID())
 	                   .arg(m_viewID)
@@ -1750,11 +1754,8 @@ QByteArray SketchWidget::removeOutsideConnections(const QByteArray & itemData, Q
 	// now have to remove each connection that points to a part outside of the set of parts being copied
 
 	QDomDocument domDocument;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = domDocument.setContent(itemData, &errorStr, &errorLine, &errorColumn);
-	if (!result) return ___emptyByteArray___;
+	auto parseResult = domDocument.setContent(itemData);
+	if (!parseResult) return ___emptyByteArray___;
 
 	QDomElement root = domDocument.documentElement();
 	if (root.isNull()) {
@@ -4468,7 +4469,33 @@ double SketchWidget::fitInWindow() {
 	setHorizontalScrollBarPolicy(originalHorizontalPolicy);
 	setVerticalScrollBarPolicy(originalVerticalPolicy);
 
-	QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+	// Check if stabilized fit mode is enabled via environment variable.
+	// Set FRITZING_STABILIZED_FIT=1 to enable more deterministic positioning
+	// for screenshot tests. This may require regenerating reference images.
+	static bool stabilizedFit = qEnvironmentVariableIsSet("FRITZING_STABILIZED_FIT");
+
+	if (stabilizedFit) {
+		// Process events multiple times to ensure all layout updates complete.
+		// A single processEvents call is insufficient as Qt layout operations
+		// may schedule additional updates in subsequent event loop iterations.
+		// Using 5 iterations provides sufficient settling time for complex layouts.
+		for (int i = 0; i < 5; i++) {
+			QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+		}
+
+		// Force scroll positions to integer values for deterministic positioning.
+		// This prevents sub-pixel differences that can cause screenshot test failures.
+		int hValue = horizontalScrollBar()->value();
+		int vValue = verticalScrollBar()->value();
+		horizontalScrollBar()->setValue(hValue);
+		verticalScrollBar()->setValue(vValue);
+
+		// Final event flush after scroll adjustment
+		QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+	} else {
+		// Legacy behavior: single processEvents call
+		QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+	}
 
 	double scaleFactor = this->transform().m11();
 	m_scaleValue = scaleFactor * 100; // Convert scale factor to percentage
@@ -5672,8 +5699,25 @@ void SketchWidget::prepDeleteOtherProps(ItemBase * itemBase, long id, const QStr
 	if (capacitor) {
 		QHash<QString, QString> properties;
 		capacitor->getProperties(properties);
-		Q_FOREACH(QString prop, properties.keys()) {
-			new SetPropCommand(this, id, prop, properties.value(prop), properties.value(prop), true, parentCommand);
+
+		// If no properties from Capacitor class, try to get them from ModelPart directly
+		// This handles obsolete capacitors that don't have PropertyDef entries
+		if (properties.isEmpty()) {
+			QHash<QString, QString> modelPartProps = itemBase->modelPart()->properties();
+			for (const QString& key : modelPartProps.keys()) {
+				QString value = modelPartProps.value(key);
+				if (key.compare("capacitance", Qt::CaseInsensitive) == 0 ||
+				    key.compare("voltage", Qt::CaseInsensitive) == 0) {
+					DebugDialog::debug(QString("prepDeleteOtherProps: Preserving static property '%1' = '%2' from obsolete capacitor %3")
+						.arg(key).arg(value).arg(itemBase->moduleID()));
+					properties.insert(key, value);
+				}
+			}
+		}
+
+		for (const QString& prop : properties.keys()) {
+			QString value = properties.value(prop);
+			new SetPropCommand(this, id, prop, value, value, true, parentCommand);
 		}
 	}
 
@@ -7352,7 +7396,8 @@ bool SketchWidget::modifyNewWireConnections(Wire * dragWire, ConnectorItem * fro
 */
 
 void SketchWidget::setupAutoscroll(bool moving) {
-	m_autoScrollX = m_autoScrollY = 0;
+	m_autoScrollX = 0;
+	m_autoScrollY = 0;
 	m_autoScrollThreshold = (moving) ? MoveAutoScrollThreshold : DragAutoScrollThreshold;
 	m_autoScrollCount = 0;
 	connect(&m_autoScrollTimer, SIGNAL(timeout()), this,
@@ -7382,7 +7427,8 @@ bool SketchWidget::checkAutoscroll(QPointF globalPos)
 	}
 
 	if (!r.contains(q)) {
-		m_autoScrollX = m_autoScrollY = 0;
+		m_autoScrollX = 0;
+		m_autoScrollY = 0;
 		if (m_autoScrollCount < m_autoScrollThreshold) {
 			m_autoScrollCount = 0;
 		}
@@ -7395,7 +7441,8 @@ bool SketchWidget::checkAutoscroll(QPointF globalPos)
 	bool autoScroll = !r.contains(q);
 	if (autoScroll) {
 		if (++m_autoScrollCount < m_autoScrollThreshold) {
-			m_autoScrollX = m_autoScrollY = 0;
+			m_autoScrollX = 0;
+			m_autoScrollY = 0;
 			//DebugDialog::debug("in autoscrollThreshold");
 			return true;
 		}
@@ -7434,7 +7481,8 @@ bool SketchWidget::checkAutoscroll(QPointF globalPos)
 
 	}
 	else {
-		m_autoScrollX = m_autoScrollY = 0;
+		m_autoScrollX = 0;
+		m_autoScrollY = 0;
 		if (m_autoScrollCount < m_autoScrollThreshold) {
 			m_autoScrollCount = 0;
 		}
@@ -7714,11 +7762,9 @@ void SketchWidget::processTextElementsInSVG(QString &svg, ItemBase *itemBase, Re
 	}
 
 	QDomDocument doc;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) {
 		return;
 	}
 
@@ -7851,10 +7897,8 @@ QString SketchWidget::renderToSVG(RenderThing & renderThing, QList<QGraphicsItem
 
 			QString legSvg;
 			QDomDocument doc;
-			QString errorStr;
-			int errorLine;
-			int errorColumn;
-			if (doc.setContent(itemSvg, &errorStr, &errorLine, &errorColumn)) {
+			auto parseResult = doc.setContent(itemSvg);
+			if (parseResult) {
 				bool changed = false;
 				if (renderThing.renderBlocker) {
 					Pad * pad = qobject_cast<Pad *>(itemBase);
@@ -8469,8 +8513,13 @@ void SketchWidget::initBackgroundColor() {
 	QSettings settings;
 	QString colorName = settings.value(QString("%1BackgroundColor").arg(getShortName())).toString();
 	if (!colorName.isEmpty()) {
+		// Add backwards compatibility for versions of Qt previous to 6.4
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+		QColor color = QColor::fromString(colorName);
+		#else
 		QColor color;
 		color.setNamedColor(colorName);
+		#endif
 		setBackground(color);
 	}
 

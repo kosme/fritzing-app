@@ -76,12 +76,22 @@ bool SvgFileSplitter::splitString(QString & contents, const QString & elementID)
 	// get rid of inkscape stuff too
 	TextUtils::cleanSodipodi(contents);
 
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = m_domDocument.setContent(contents, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
-	if (!m_domDocument.setContent(contents, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("parse error: %1 l:%2 c:%3\n\n%4").arg(errorStr).arg(errorLine).arg(errorColumn).arg(contents));
+	int errorLine, errorColumn;
+	bool parseResult = m_domDocument.setContent(contents, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("parse error: %1 l:%2 c:%3\n\n%4")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		.arg(contents));
 		return false;
 	}
 
@@ -167,7 +177,13 @@ bool SvgFileSplitter::splitString(QString & contents, const QString & elementID)
 	svgOnly += elementText;
 	svgOnly += "</svg>";
 
-	if (!m_domDocument.setContent(svgOnly, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult2 = m_domDocument.setContent(svgOnly, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult2 = m_domDocument.setContent(svgOnly, true);
+	#endif
+	if (!parseResult2) {
 		return false;
 	}
 
@@ -462,8 +478,15 @@ void SvgFileSplitter::normalizeChild(QDomElement & element,
 		TextUtils::fixStyleAttribute(element);
 		normalizeAttribute(element, "x", sNewWidth, vbWidth);
 		normalizeAttribute(element, "y", sNewHeight, vbHeight);
-		normalizeAttribute(element, "dx", sNewWidth, vbWidth);
-		normalizeAttribute(element, "dy", sNewHeight, vbHeight);
+		// Skip normalization for dx/dy with em/ex units (font-relative)
+		QString dx = element.attribute("dx").trimmed();
+		if (!dx.endsWith("em") && !dx.endsWith("ex")) {
+			normalizeAttribute(element, "dx", sNewWidth, vbWidth);
+		}
+		QString dy = element.attribute("dy").trimmed();
+		if (!dy.endsWith("em") && !dy.endsWith("ex")) {
+			normalizeAttribute(element, "dy", sNewHeight, vbHeight);
+		}
 		normalizeAttribute(element, "stroke-width", sNewWidth, vbWidth);
 		normalizeFontSize(element, "font-size", sNewWidth, vbWidth);
 		setStrokeOrFill(element, blackOnly, "black", false);
@@ -1206,13 +1229,15 @@ bool SvgFileSplitter::getSvgSizeAttributes(const QString & svg, QString & width,
 }
 
 bool SvgFileSplitter::changeStrokeWidth(const QString & svg, double delta, bool absolute, bool changeOpacity, QByteArray & byteArray) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
 
-	if (!domDocument.setContent(svg, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = domDocument.setContent(svg, true);
+	#endif
+	if (!parseResult) {
 		return false;
 	}
 
@@ -1287,13 +1312,14 @@ void SvgFileSplitter::forceStrokeWidth(QDomElement & element, double delta, cons
 }
 
 bool SvgFileSplitter::changeColors(const QString & svg, QString & toColor, QStringList & exceptions, QByteArray & byteArray) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
-
-	if (!domDocument.setContent(svg, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = domDocument.setContent(svg, true);
+	#endif
+	if (!parseResult) {
 		return false;
 	}
 
@@ -1347,11 +1373,13 @@ bool SvgFileSplitter::shiftAttribute(QDomElement & element, const char * attribu
 
 bool SvgFileSplitter::load(const QString& string)
 {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
-	return m_domDocument.setContent(string, true, &errorStr, &errorLine, &errorColumn);
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = m_domDocument.setContent(string, QDomDocument::ParseOption::UseNamespaceProcessing);
+	return parseResult.operator bool();
+	#else
+	return m_domDocument.setContent(string, true);
+	#endif
 }
 
 bool SvgFileSplitter::load(const QString * filename)
@@ -1366,11 +1394,13 @@ bool SvgFileSplitter::load(const QString * filename)
 
 bool SvgFileSplitter::load(QFile * file)
 {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
-	return m_domDocument.setContent(file, true, &errorStr, &errorLine, &errorColumn);
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = m_domDocument.setContent(file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	return parseResult.operator bool();
+	#else
+	return m_domDocument.setContent(file, true);
+	#endif
 }
 
 QString SvgFileSplitter::toString() {
@@ -1391,16 +1421,19 @@ void SvgFileSplitter::gReplace(const QString & id)
 }
 
 QByteArray SvgFileSplitter::hideText(const QString & filename) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
 
 	QFile file(filename);
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(filename));
 	}
-	if (!doc.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = doc.setContent(&file, true);
+	#endif
+	if (!parseResult) {
 		return QByteArray();
 	}
 
@@ -1411,12 +1444,10 @@ QByteArray SvgFileSplitter::hideText(const QString & filename) {
 }
 
 QByteArray SvgFileSplitter::hideText2(const QByteArray & svg) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
 
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) {
 		return QByteArray();
 	}
 
@@ -1427,12 +1458,10 @@ QByteArray SvgFileSplitter::hideText2(const QByteArray & svg) {
 }
 
 QString SvgFileSplitter::hideText3(const QString & svg) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
 
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) {
 		return "";
 	}
 
@@ -1457,16 +1486,19 @@ void SvgFileSplitter::hideTextAux(QDomElement & parent, bool hideChildren) {
 }
 
 QByteArray SvgFileSplitter::showText(const QString & filename, bool & hasText) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
 
 	QFile file(filename);
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(filename));
 	}
-	if (!doc.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = doc.setContent(&file, true);
+	#endif
+	if (!parseResult) {
 		return QByteArray();
 	}
 
@@ -1480,12 +1512,10 @@ QByteArray SvgFileSplitter::showText(const QString & filename, bool & hasText) {
 }
 
 QByteArray SvgFileSplitter::showText2(const QByteArray & svg, bool & hasText) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
 
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) {
 		return QByteArray();
 	}
 
@@ -1499,12 +1529,10 @@ QByteArray SvgFileSplitter::showText2(const QByteArray & svg, bool & hasText) {
 }
 
 QString SvgFileSplitter::showText3(const QString & svg, bool & hasText) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
 
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	auto parseResult = doc.setContent(svg);
+	if (!parseResult) {
 		return "";
 	}
 

@@ -43,9 +43,10 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "referencemodel/referencemodel.h"
 #include "items/partfactory.h"
 #include "partsbinpalette/partsbinpalettewidget.h"
-#include "partsbinpalette//searchbinpalettewidget.h"
+#include "partsbinpalette/searchbinpalettewidget.h"
 #include "partsbinpalette/partsbinview.h"
 #include "utils/fmessagebox.h"
+#include "mainwindow/fprobeactions.h"
 
 ///////////////////////////////////////////////////////////
 
@@ -138,6 +139,8 @@ void BinManager::initStandardBins()
 {
 	createCombinedMenu();
 	createContextMenus();
+
+	new FProbeActions("BinMenu", m_combinedMenu);
 
 	//DebugDialog::debug("init bin manager");
 	QList<BinLocation *> actualLocations;
@@ -690,13 +693,23 @@ void BinManager::readTheoreticalLocations(QList<BinLocation *> & theoreticalLoca
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(":/resources/bins/order.xml"));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
-
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse order.xml: %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse order.xml: %1 %2 %3")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return;
 	}
 
@@ -759,16 +772,17 @@ void BinManager::hackLocalContrib(QList<BinLocation *> & locations)
 		locations.append(myParts);
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QFile contribFile(localContrib->path);
 	if (!contribFile.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(localContrib->path));
 	}
 	QDomDocument contribDoc;
-	bool result = contribDoc.setContent(&contribFile, true, &errorStr, &errorLine, &errorColumn);
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = contribDoc.setContent(&contribFile, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = contribDoc.setContent(&contribFile, true);
+	#endif
 	locations.removeOne(localContrib);
 	contribFile.close();
 	bool removed = contribFile.remove();
@@ -776,14 +790,20 @@ void BinManager::hackLocalContrib(QList<BinLocation *> & locations)
 		DebugDialog::debug("failed to remove contrib bin");
 	}
 
-	if (!result) return;
+	if (!parseResult) return;
 
 	QFile myPartsFile(myParts->path);
 	if (!myPartsFile.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(myParts->path));
 	}
 	QDomDocument myPartsDoc;
-	if (!myPartsDoc.setContent(&myPartsFile, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult myPartsParseResult = myPartsDoc.setContent(&myPartsFile, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool myPartsParseResult = myPartsDoc.setContent(&myPartsFile, true);
+	#endif
+	if (!myPartsParseResult) {
 		return;
 	}
 
@@ -1345,25 +1365,25 @@ void BinManager::copyFilesToContrib(ModelPart * mp, QWidget * originator) {
 	QString path = mp->path();
 	if (path.isEmpty()) return;
 
+	QString moduleID = FolderUtils::sanitizeForFolder(mp->moduleID());
+	if (moduleID.isEmpty()) return;
+
+	QString destDir = FolderUtils::getLocalPartsPath() + "/contrib/" + moduleID;
+	QDir().mkpath(destDir);
+
 	QFileInfo info(path);
 	QFile fzp(path);
+	FolderUtils::slamCopy(fzp, destDir + "/" + info.fileName());
 
-	QString parts = FolderUtils::getUserPartsPath();
-	FolderUtils::slamCopy(fzp, parts + "/contrib/" + info.fileName());
-	QString prefix = parts + "/svg/contrib/";
-
-	QDir dir = info.absoluteDir();
-	dir.cdUp();
-	dir.cd("svg");
-	dir.cd("contrib");
-
+	QDir srcDir = info.absoluteDir();
 	QList<ViewLayer::ViewID> viewIDs;
-	viewIDs << ViewLayer::IconView << ViewLayer::BreadboardView << ViewLayer::SchematicView << ViewLayer::PCBView;
-	Q_FOREACH (ViewLayer::ViewID viewID, viewIDs) {
+	viewIDs << ViewLayer::IconView << ViewLayer::BreadboardView
+	        << ViewLayer::SchematicView << ViewLayer::PCBView;
+	for (ViewLayer::ViewID viewID : viewIDs) {
 		QString fn = mp->hasBaseNameFor(viewID);
 		if (!fn.isEmpty()) {
-			QFile svg(dir.absoluteFilePath(fn));
-			FolderUtils::slamCopy(svg, prefix + fn);
+			QFile svg(srcDir.absoluteFilePath(fn));
+			FolderUtils::slamCopy(svg, destDir + "/" + fn);
 		}
 	}
 }

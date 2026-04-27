@@ -426,11 +426,8 @@ QString GerberGenerator::clipToBoard(QString svgString, ItemBase * board, const 
 QString GerberGenerator::clipToBoard(QString svgString, QRectF & boardRect, const QString & layerName, SVG2gerber::ForWhy forWhy, const QString & clipString, bool displayMessageBoxes, QMultiHash<long, ConnectorItem *> & treatAsCircle) {
 	// document 1 will contain svg that is easy to convert to gerber
 	QDomDocument domDocument1;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = domDocument1.setContent(svgString, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
+	auto parseResult = domDocument1.setContent(svgString);
+	if (!parseResult) {
 		return "";
 	}
 

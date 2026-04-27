@@ -825,16 +825,27 @@ void Stripboard::initStripLayouts() {
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(":/resources/templates/stripboards.xml"));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
 
 	StripLayout stripLayoutEmpty(EmptyString, 20, 30, "");
 	StripLayouts.append(stripLayoutEmpty);
 
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse stripboards.xml: %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse stripboards.xml: %1 %2 %3")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return;
 	}
 

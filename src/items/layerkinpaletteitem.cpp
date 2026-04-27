@@ -248,11 +248,22 @@ void SchematicTextLayerKinPaletteItem::initTextThings() {
 	QByteArray textSvg = this->property("textSvg").toByteArray();
 
 	QDomDocument doc;
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(textSvg);
+	#else
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	if (!doc.setContent(textSvg, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse schematic text: %1 %2 %3:\n%4").arg(errorStr).arg(errorLine).arg(errorColumn).arg(QString(textSvg)));
+	int errorLine, errorColumn;
+	bool parseResult = doc.setContent(textSvg, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse schematic text: %1 %2 %3:\n%4")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		.arg(QString(textSvg)));
 		return;
 	}
 
@@ -268,11 +279,22 @@ void SchematicTextLayerKinPaletteItem::initTextThings() {
 
 QString SchematicTextLayerKinPaletteItem::flipTextSvg(const QString & textSvg) {
 	QDomDocument doc;
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(textSvg);
+	#else
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	if (!doc.setContent(textSvg, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse schematic text: %1 %2 %3:\n%4").arg(errorStr).arg(errorLine).arg(errorColumn).arg(QString(textSvg)));
+	int errorLine, errorColumn;
+	bool parseResult = doc.setContent(textSvg, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse schematic text: %1 %2 %3:\n%4")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		.arg(QString(textSvg)));
 		return "";
 	}
 
@@ -350,11 +372,22 @@ QString SchematicTextLayerKinPaletteItem::rotate(const QString & svg, bool isFli
 	Q_UNUSED(isFlipped);
 
 	QDomDocument doc;
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(svg);
+	#else
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse schematic text: %1 %2 %3:\n%4").arg(errorStr).arg(errorLine).arg(errorColumn).arg(QString(svg)));
+	int errorLine, errorColumn;
+	bool parseResult = doc.setContent(svg, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse schematic text: %1 %2 %3:\n%4")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		.arg(QString(svg)));
 		return svg;
 	}
 

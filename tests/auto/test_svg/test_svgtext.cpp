@@ -78,8 +78,7 @@ R"x(
 
     QDomDocument doc;
     QString errorStr;
-    int errorLine;
-    int errorColumn;
+    int errorLine, errorColumn;
     if (!doc.setContent(input, &errorStr, &errorLine, &errorColumn)) {
         throw;
     }

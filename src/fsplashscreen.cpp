@@ -37,13 +37,23 @@ FSplashScreen::FSplashScreen(const QPixmap & pixmap, Qt::WindowFlags f ) : QSpla
 		return;
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
-
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse splash.xml: %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse splash.xml: %1 %2 %3")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return;
 	}
 
@@ -68,7 +78,11 @@ FSplashScreen::FSplashScreen(const QPixmap & pixmap, Qt::WindowFlags f ) : QSpla
 				messageThing->color = QColor(0, 0, 0);
 			}
 			else {
+				#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+				messageThing->color = QColor::fromString(colorName);
+				#else
 				messageThing->color.setNamedColor(colorName);
+				#endif
 			}
 			m_items.insert(id, messageThing);
 		}

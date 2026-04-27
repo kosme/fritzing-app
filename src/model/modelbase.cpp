@@ -25,10 +25,16 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../utils/textutils.h"
 #include "../utils/folderutils.h"
 #include "../utils/fmessagebox.h"
+#include "../utils/misc.h"
 #include "../version/version.h"
 #include "../viewgeometry.h"
 
+#include <QFileDevice>
 #include <QMessageBox>
+#include <quazip/quazipfile.h>
+
+#include <cerrno>
+#include <cstring>
 
 QList<QString> ModelBase::CoreList;
 
@@ -80,17 +86,29 @@ bool ModelBase::loadFromFile(const QString & fileName, ModelBase * referenceMode
 		return false;
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
 
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
 		FMessageBox::information(nullptr, QObject::tr("Fritzing"),
-		                         QObject::tr("Parse error (1) at line %1, column %2:\n%3\n%4")
-		                         .arg(errorLine)
-		                         .arg(errorColumn)
-								 .arg(errorStr, fileName));
+		                        QObject::tr("Parse error (1) at line %1, column %2:\n%3\n%4")
+								#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		                        .arg(parseResult.errorLine)
+		                        .arg(parseResult.errorColumn)
+								.arg(parseResult.errorMessage, fileName)
+								#else
+								.arg(errorLine)
+		                        .arg(errorColumn)
+								.arg(errorStr, fileName)
+								#endif
+								);
 		return false;
 	}
 
@@ -537,16 +555,72 @@ void ModelBase::save(const QString & fileName, QXmlStreamWriter & streamWriter, 
 	}
 }
 
+static QString getIoDeviceError(QuaZip *zip) {
+	QIODevice *dev = zip->getIoDevice();
+	if (!dev) return QString();
+	auto *fd = qobject_cast<QFileDevice *>(dev);
+	if (fd && fd->error() != QFileDevice::NoError) {
+		return fd->errorString();
+	}
+	// Fallback: QSaveFile may not report write errors that went through
+	// zlib buffering. Check errno directly — it's still valid right after
+	// the failing close/flush call.
+	if (errno != 0) {
+		return QString::fromLocal8Bit(strerror(errno));
+	}
+	return QString();
+}
+
+bool ModelBase::saveToZip(QuaZip *zip, const QString &fileName, bool asPart, QString *errorOut) {
+	QuaZipFile zipFile(zip);
+	QString entryName = QFileInfo(fileName).completeBaseName() + FritzingSketchExtension;
+	if (!zipFile.open(QIODevice::WriteOnly, QuaZipNewInfo(entryName))) {
+		QString devError = getIoDeviceError(zip);
+		QString msg = devError.isEmpty()
+			? QString("saveToZip: failed to open zip entry '%1', error %2")
+				.arg(entryName).arg(zipFile.getZipError())
+			: devError;
+		DebugDialog::debug(QString("saveToZip: failed to open zip entry '%1', error %2")
+			.arg(entryName).arg(zipFile.getZipError()));
+		if (errorOut) *errorOut = msg;
+		return false;
+	}
+
+	QXmlStreamWriter streamWriter(&zipFile);
+	save(fileName, streamWriter, asPart);
+
+	if (streamWriter.hasError()) {
+		QString devError = getIoDeviceError(zip);
+		QString msg = devError.isEmpty()
+			? QString("saveToZip: XML write error for '%1'").arg(entryName)
+			: devError;
+		DebugDialog::debug(QString("saveToZip: XML write error for '%1'").arg(entryName));
+		if (errorOut) *errorOut = msg;
+		zipFile.close();
+		return false;
+	}
+
+	zipFile.close();
+	if (zipFile.getZipError() != UNZ_OK) {
+		QString devError = getIoDeviceError(zip);
+		QString msg = devError.isEmpty()
+			? QString("saveToZip: zip entry close error %1").arg(zipFile.getZipError())
+			: devError;
+		DebugDialog::debug(QString("saveToZip: zip entry close error %1").arg(zipFile.getZipError()));
+		if (errorOut) *errorOut = msg;
+		return false;
+	}
+
+	return true;
+}
+
 bool ModelBase::paste(ModelBase * referenceModel, QByteArray & data, QList<ModelPart *> & modelParts, QHash<QString, QRectF> & boundingRects, bool preserveIndex)
 {
 	m_referenceModel = referenceModel;
 
 	QDomDocument domDocument;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = domDocument.setContent(data, &errorStr, &errorLine, &errorColumn);
-	if (!result) return false;
+	auto parseResult = domDocument.setContent(data);
+	if (!parseResult) return false;
 
 	QDomElement el = domDocument.documentElement();
 	if (el.isNull()) {
@@ -911,22 +985,22 @@ ModelPart * ModelBase::createOldSchematicPartAux(ModelPart * modelPart, const QS
 	// Add backwards compatibility for versions of Qt previous to 6.5
 	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 	QDomDocument::ParseResult parseResult = oldDoc.setContent(&newFzp);
-	if (!parseResult.operator bool()) {						 
 	#else
 	QString msg;
 	int line;
 	int column;
-	if (!oldDoc.setContent(&newFzp, &msg, &line, &column)) {
+	bool parseResult = oldDoc.setContent(&newFzp, &msg, &line, &column);
 	#endif
+	if (!parseResult) {
 		QString logMessage = QString("Parse Error: %1 at line %2, column %3 in %4")
 	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 		.arg(parseResult.errorMessage)
 		.arg(parseResult.errorLine)
 		.arg(parseResult.errorColumn)
-		.arg(path);
 	#else
-		.arg(msg).arg(line).arg(column).arg(path);
+		.arg(msg).arg(line).arg(column)
 	#endif
+		.arg(path);
 		DebugDialog::debug(logMessage);
 		return nullptr;
 	}

@@ -1280,8 +1280,13 @@ void Wire::setColorString(QString colorName, double op, bool restore) {
 		colorString = colorName;
 	}
 
+	// Add backwards compatibility for versions of Qt previous to 6.4
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+	QColor c = QColor::fromString(colorString);
+	#else
 	QColor c;
 	c.setNamedColor(colorString);
+	#endif
 	setColor(c, op);
 	m_colorName = colorName;
 
@@ -1290,7 +1295,12 @@ void Wire::setColorString(QString colorName, double op, bool restore) {
 		shadowColorString = colorString;
 	}
 
+	// Add backwards compatibility for versions of Qt previous to 6.4
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+	c = QColor::fromString(shadowColorString);
+	#else
 	c.setNamedColor(shadowColorString);
+	#endif
 	setShadowColor(c, restore);
 }
 

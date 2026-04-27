@@ -316,14 +316,24 @@ bool Board::checkImage(const QString & filename) {
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(filename));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
 
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		unableToLoad(filename, tr("due to an xml problem: %1 line:%2 column:%3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		unableToLoad(filename, tr("due to an xml problem: %1 line:%2 column:%3")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return false;
 	}
 
@@ -413,11 +423,8 @@ void Board::moreCheckImage(const QString & filename) {
 
 	QString nsvg = setBoardOutline(svg);
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
-	domDocument.setContent(nsvg, &errorStr, &errorLine, &errorColumn);
+	domDocument.setContent(nsvg);
 	QDomElement element = TextUtils::findElementWithAttribute(domDocument.documentElement(), "id", GerberGenerator::MagicBoardOutlineID);
 
 	int subpaths = 1;
@@ -464,12 +471,14 @@ void Board::moreCheckImage(const QString & filename) {
 }
 
 QString Board::setBoardOutline(const QString & svg) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
-	if (!domDocument.setContent(svg, true, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = domDocument.setContent(svg, true);
+	#endif
+	if (!parseResult) {
 		return svg;
 	}
 

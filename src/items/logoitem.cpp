@@ -399,14 +399,24 @@ void LogoItem::loadImage(const QString & fileName, bool addName)
 		TextUtils::fixMuch(svg, true);
 		TextUtils::fixPixelDimensionsIn(svg);
 
-		QString errorStr;
-		int errorLine;
-		int errorColumn;
-
 		QDomDocument domDocument;
 
-		if (!domDocument.setContent(svg, true, &errorStr, &errorLine, &errorColumn)) {
-			unableToLoad(fileName, tr("due to an xml problem: %1 line:%2 column:%3").arg(errorStr).arg(errorLine).arg(errorColumn));
+		// Add backwards compatibility for versions of Qt previous to 6.5
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		QDomDocument::ParseResult parseResult = domDocument.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+		#else
+		QString errorStr;
+		int errorLine, errorColumn;
+		bool parseResult = domDocument.setContent(svg, true, &errorStr, &errorLine, &errorColumn);
+		#endif
+		if (!parseResult) {
+			unableToLoad(fileName, tr("due to an xml problem: %1 line:%2 column:%3")
+			#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+			.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+			#else
+			.arg(errorStr).arg(errorLine).arg(errorColumn)
+			#endif
+			);
 			return;
 		}
 
@@ -798,14 +808,24 @@ QStringList LogoItem::getViewBox(const QDomElement &root)
 
 bool LogoItem::parseDOM(QDomDocument &doc, const QString &svg, const QString &context)
 {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	// Add backwards compatibility for versions of Qt previous to 6.5
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		QDomDocument::ParseResult parseResult = doc.setContent(svg);
+		#else
+		QString errorStr;
+		int errorLine, errorColumn;
+		bool parseResult = doc.setContent(svg, &errorStr, &errorLine, &errorColumn);
+		#endif
+	if (!parseResult) {
 		DebugDialog::stream(DebugDialog::Error)
-			<< "Failed to parse " << context << ": " << errorStr << " at line " << errorLine
+			<< "Failed to parse " << context << ": " << 
+			#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+			parseResult.errorMessage << " at line " << parseResult.errorLine
+			<< ", column " << parseResult.errorColumn;
+			#else
+			errorStr << " at line " << errorLine
 			<< ", column " << errorColumn;
+			#endif
 		return false;
 	}
 	return true;

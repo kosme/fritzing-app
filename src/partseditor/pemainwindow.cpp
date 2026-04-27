@@ -227,12 +227,23 @@ void removeGornAux(QDomElement & element) {
 QString removeGorn(QString & svg) {
 	QDomDocument doc;
 
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(svg);
+	#else
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	int errorLine, errorColumn;
+	bool parseResult = doc.setContent(svg, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
 		// shouldn't happen
-		DebugDialog::debug(QString("remove gorn failure: %1 %2 %3 %4").arg(errorStr).arg(errorLine).arg(errorColumn).arg(svg));
+		DebugDialog::debug(QString("remove gorn failure: %1 %2 %3 %4")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		.arg(svg));
 		return svg;
 	}
 
@@ -311,8 +322,8 @@ PEMainWindow::PEMainWindow(ReferenceModel * referenceModel, QWidget * parent)
 
 	m_autosaveTimer.stop();
 	disconnect(&m_autosaveTimer, SIGNAL(timeout()), this, SLOT(backupSketch()));
-	m_userPartsFolderPath = FolderUtils::getUserPartsPath()+"/user/";
-	m_userPartsFolderSvgPath = FolderUtils::getUserPartsPath()+"/svg/user/";
+	m_userPartsFolderPath = FolderUtils::getLocalPartsPath()+"/user/";
+	m_userPartsFolderSvgPath = m_userPartsFolderPath;
 }
 
 PEMainWindow::~PEMainWindow()
@@ -401,7 +412,7 @@ void PEMainWindow::closeEvent(QCloseEvent *event)
 		messageBox.setDefaultButton(keepWorkingButton);
 
 		messageBox.exec();
-		if (messageBox.clickedButton() != keepWorkingButton) {
+		if (messageBox.clickedButton() == keepWorkingButton) {
 			event->ignore();
 			return;
 		}
@@ -713,6 +724,12 @@ bool PEMainWindow::setInitialItem(PaletteItem * paletteItem)
 	m_originalFzpPath = originalModelPart->path();
 	m_originalModuleID = originalModelPart->moduleID();
 
+	// Use moduleID subfolder for temp SVGs, consistent with saveAs() and PartFactory search paths
+	QString sanitizedModuleID = FolderUtils::sanitizeForFolder(m_originalModuleID);
+	if (!sanitizedModuleID.isEmpty()) {
+		m_userPartsFolderSvgPath = m_userPartsFolderPath + sanitizedModuleID + "/";
+	}
+
 	QFileInfo info(originalModelPart->path());
 	QString basename = info.completeBaseName();
 	int ix = basename.indexOf(GuidMatcher, 0);
@@ -831,22 +848,6 @@ bool PEMainWindow::setInitialItem(PaletteItem * paletteItem)
 		viewThing->referenceFile = getSvgReferenceFile(itemBase->filename());
 
 		if (!itemBase->hasCustomSVG()) {
-			QFile file(itemBase->filename());
-			if (!file.open(QFile::ReadOnly)) {
-				QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to load '%1'. Please close the parts editor without saving and try again.").arg(itemBase->filename()));
-				continue;
-			}
-
-			QString svg = file.readAll();
-			insertDesc(viewThing->referenceFile, svg);
-			TextUtils::fixMuch(svg, true);
-			QString svgPath = makeSvgPath2(viewThing->sketchWidget);
-			bool result = writeXml(m_userPartsFolderSvgPath + svgPath, removeGorn(svg), true);
-			if (!result) {
-				QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to write svg to  %1").arg(svgPath));
-				return false;
-			}
-
 			continue;
 		}
 
@@ -908,7 +909,9 @@ bool PEMainWindow::setInitialItem(PaletteItem * paletteItem)
 		header += makeDesc(viewThing->referenceFile);
 		svg = header + svg + "</svg>";
 		QString svgPath = makeSvgPath2(viewThing->sketchWidget);
-		bool result = writeXml(m_userPartsFolderSvgPath + svgPath, removeGorn(svg), true);
+		QString actualPath = m_userPartsFolderSvgPath + svgPath;
+		FolderUtils::ensureDirectoryExists(actualPath);
+		bool result = writeXml(actualPath, removeGorn(svg), true);
 		if (!result) {
 			QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to write svg to  %1").arg(svgPath));
 			return false;
@@ -1291,10 +1294,10 @@ void PEMainWindow::changeConnectorElement(QDomElement & connector, ConnectorMeta
 
 void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase, QDomDocument & svgDocument)
 {
+	#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
+	int errorLine, errorColumn;
+	#endif
 	QDomDocument tempSvgDoc;
 	if (itemBase == nullptr) {
 		return;
@@ -1303,8 +1306,20 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(itemBase->filename()));
 	}
-	if (!tempSvgDoc.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse svg: %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = tempSvgDoc.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult = tempSvgDoc.setContent(&file, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse svg: %1 %2 %3")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return;
 	}
 
@@ -1330,8 +1345,20 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 	FSvgRenderer tempRenderer;
 	QByteArray rendered = tempRenderer.loadSvg(tempSvgDoc.toByteArray(), "", false);
 	// cleans up the svg
-	if (!svgDocument.setContent(rendered, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse svg (2): %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0) 
+	QDomDocument::ParseResult parseResult2 = svgDocument.setContent(rendered, QDomDocument::ParseOption::UseNamespaceProcessing);
+	#else
+	bool parseResult2 = svgDocument.setContent(rendered, true, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult2) {
+		DebugDialog::debug(QString("unable to parse svg (2): %1 %2 %3")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult2.errorMessage).arg(parseResult2.errorLine).arg(parseResult2.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return;
 	}
 
@@ -1587,13 +1614,23 @@ void PEMainWindow::loadImage()
 		return;
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	bool result = doc.setContent(svg.toUtf8(), &errorStr, &errorLine, &errorColumn);
-	if (!result) {
-		QMessageBox::warning(nullptr, tr("SVG problem"), tr("Unable to parse '%1': %2 line:%3 column:%4").arg(origPath).arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(svg.toUtf8());
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = doc.setContent(svg.toUtf8(), &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		QMessageBox::warning(nullptr, tr("SVG problem"), tr("Unable to parse '%1': %2 line:%3 column:%4").arg(origPath)
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0) 
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(origPath).arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return;
 	}
 
@@ -1618,6 +1655,7 @@ void PEMainWindow::loadImage()
 	TextUtils::fixMuch(svg, true);
 	insertDesc(newReferenceFile, svg);
 	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(m_currentGraphicsView);
+	FolderUtils::ensureDirectoryExists(newPath);
 	bool success = writeXml(newPath, removeGorn(svg), true);
 	if (!success) {
 		QMessageBox::warning(nullptr, tr("Copy problem"), tr("Unable to make a local copy of: '%1'").arg(origPath));
@@ -2077,6 +2115,7 @@ void PEMainWindow::relocateConnectorSvg(SketchWidget * sketchWidget, const QStri
 
 	// update svg in case there is a subsequent call to reload
 	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
+	FolderUtils::ensureDirectoryExists(newPath);
 	QString svg = TextUtils::svgNSOnly(svgDoc->toString());
 	writeXml(newPath, removeGorn(svg), true);
 	setImageAttribute(fzpRoot, newPath, viewID);
@@ -2119,21 +2158,21 @@ bool PEMainWindow::saveAs(bool overWrite)
 {
 	QStringList peAlienFiles;
 
-	bool ok = false;
-	QString prefix = QInputDialog::getText(
-	                     this,
-	                     tr("Filename prefix"),
-	                     tr("<p>Please enter a prefix to help you identify the part files.<br/>"
-	                        "The file names will have the form 'PREFIX_%1'.<br/>"
-	                        "(It is not necessary to change the proposed prefix, since a unique suffix is always added.)</p>").arg(m_guid),
-	                     QLineEdit::Normal,
-	                     m_prefix,
-	                     &ok
-	                 );
-	if (!ok || prefix.isEmpty()) return false;
-
-	if (prefix != m_prefix) overWrite = false;
-	m_prefix = prefix;
+	if (!overWrite) {
+		bool ok = false;
+		QString prefix = QInputDialog::getText(
+		                     this,
+		                     tr("Filename prefix"),
+		                     tr("<p>Please enter a prefix to help you identify the part files.<br/>"
+		                        "The file names will have the form 'PREFIX_%1'.<br/>"
+		                        "(It is not necessary to change the proposed prefix, since a unique suffix is always added.)</p>").arg(m_guid),
+		                     QLineEdit::Normal,
+		                     m_prefix,
+		                     &ok
+		                 );
+		if (!ok || prefix.isEmpty()) return false;
+		m_prefix = prefix;
+	}
 
 	QDomElement fzpRoot = m_fzpDocument.documentElement();
 
@@ -2187,6 +2226,19 @@ bool PEMainWindow::saveAs(bool overWrite)
 	}
 
 	QDomElement views = fzpRoot.firstChildElement("views");
+
+	// Determine the moduleID for the save destination subfolder
+	QString targetModuleID;
+	if (overWrite) {
+		targetModuleID = m_originalModuleID;
+	} else {
+		targetModuleID = QString("%1_%2_%3").arg(m_prefix).arg(m_guid).arg(m_fileIndex);
+	}
+	targetModuleID = FolderUtils::sanitizeForFolder(targetModuleID);
+
+	// Co-locate SVGs with FZP in the same moduleID subfolder
+	QString fzpBasePath = m_userPartsFolderPath + targetModuleID + "/";
+	QString svgBasePath = fzpBasePath;
 
 	QHash<ViewLayer::ViewID, QString> svgPaths;
 
@@ -2260,7 +2312,12 @@ bool PEMainWindow::saveAs(bool overWrite)
 
 			Q_FOREACH (QString svg, svgList) {
 				QDomDocument doc;
+				// Add backwards compatibility for versions of Qt previous to 6.5
+				#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+				doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+				#else
 				doc.setContent(svg, true);
+				#endif
 				QDomElement root = doc.documentElement();
 				Q_FOREACH (ViewLayer::ViewLayerID vlid, sketchLayers) {
 					removeID(root, ViewLayer::viewLayerXmlNameFromID(vlid));
@@ -2275,7 +2332,8 @@ bool PEMainWindow::saveAs(bool overWrite)
 		QString svgPath = makeSvgPath2(viewThing->sketchWidget);
 		setImageAttribute(layers, svgPath);
 
-		QString actualPath = m_userPartsFolderSvgPath + svgPath;
+		QString actualPath = svgBasePath + svgPath;
+		FolderUtils::ensureDirectoryExists(actualPath);
 		peAlienFiles << actualPath;
 		// DebugDialog::debug(QString("peAlienFiles %1").arg(peAlienFiles));
 		bool result = writeXml(actualPath, removeGorn(svg), false);
@@ -2284,15 +2342,18 @@ bool PEMainWindow::saveAs(bool overWrite)
 		}
 	}
 
-	QDir dir(m_userPartsFolderPath);
-	QString suffix = QString("%1_%2_%3").arg(m_prefix).arg(m_guid).arg(m_fileIndex++);
-	QString fzpPath = dir.absoluteFilePath(QString("%1.fzp").arg(suffix));
+	QDir dir(fzpBasePath);
+	FolderUtils::ensureDirectoryExists(dir.absoluteFilePath("dummy"));
 
-	peAlienFiles << fzpPath;
+	QString fzpPath;
 	if (overWrite) {
-		fzpPath = m_originalFzpPath;
-	}
-	else {
+		// Keep original filename, save to moduleID subfolder
+		fzpPath = dir.absoluteFilePath(QFileInfo(m_originalFzpPath).fileName());
+		peAlienFiles << fzpPath;
+	} else {
+		QString suffix = QString("%1_%2_%3").arg(m_prefix).arg(m_guid).arg(m_fileIndex++);
+		fzpPath = dir.absoluteFilePath(QString("%1.fzp").arg(suffix));
+		peAlienFiles << fzpPath;
 		fzpRoot.setAttribute("moduleId", suffix);
 		QString family = m_metadataView->family();
 		QString variant = m_metadataView->variant();
@@ -2307,6 +2368,13 @@ bool PEMainWindow::saveAs(bool overWrite)
 	}
 
 	bool result = writeXml(fzpPath, m_fzpDocument.toString(), false);
+
+	// Track old path for migration cleanup (defer deletion until after all updates)
+	QString oldFzpPath;
+	if (overWrite && fzpPath != m_originalFzpPath) {
+		oldFzpPath = m_originalFzpPath;
+		m_originalFzpPath = fzpPath;
+	}
 
 	if (!overWrite) {
 		m_originalFzpPath = fzpPath;
@@ -2331,7 +2399,7 @@ bool PEMainWindow::saveAs(bool overWrite)
 			modelPart->setAlien(true);
 			Q_EMIT addToMyPartsSignal(modelPart, peAlienFiles);
 		} else {
-			QMessageBox::critical(nullptr, tr("Parts Editor Error"), tr("The file %2 with prefix %1 was not saved.").arg(prefix).arg(fzpPath));
+			QMessageBox::critical(nullptr, tr("Parts Editor Error"), tr("The file %2 with prefix %1 was not saved.").arg(m_prefix).arg(fzpPath));
 		}
 	}
 	else {
@@ -2348,7 +2416,20 @@ bool PEMainWindow::saveAs(bool overWrite)
 	}
 
 	m_autosaveNeeded = false;
+
+	// Flush any pending delayed commands before marking the stack clean.
+	// PE commands use waitPush() with a 100ms delay; if the user saves
+	// before the timer fires, the command would be pushed after setClean(),
+	// causing a false modification state.
+	m_undoStack->waitForTimers();
 	m_undoStack->setClean();
+
+	// Delete old file after all updates are complete
+	if (!oldFzpPath.isEmpty()) {
+		QFile::remove(oldFzpPath);
+	}
+
+	setWindowModified(false);
 
 	return result;
 }
@@ -2553,6 +2634,7 @@ void PEMainWindow::moveTerminalPoint(SketchWidget * sketchWidget, const QString 
 
 		// update svg in case there is a subsequent call to reload
 		QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
+		FolderUtils::ensureDirectoryExists(newPath);
 		QString svg = TextUtils::svgNSOnly(svgDoc->toString());
 		writeXml(newPath, removeGorn(svg), true);
 		setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
@@ -2756,11 +2838,8 @@ bool PEMainWindow::loadFzp(const QString & path) {
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(path));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = m_fzpDocument.setContent(&file, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
+	auto parseResult = m_fzpDocument.setContent(&file);
+	if (!parseResult) {
 		QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to load fzp from %1").arg(path));
 		return false;
 	}
@@ -3481,6 +3560,7 @@ void PEMainWindow::smdChanged(const QString & after) {
 	}
 
 	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(m_pcbGraphicsView);
+	FolderUtils::ensureDirectoryExists(newPath);
 	QString svg = TextUtils::svgNSOnly(svgDoc.toString());
 	writeXml(newPath, removeGorn(svg), true);
 
@@ -3944,6 +4024,7 @@ void PEMainWindow::convertToTenth() {
 	ViewThing * viewThing = m_viewThings.value(m_currentGraphicsView->viewID());
 	QString originalSvgPath = viewThing->itemBase->filename();
 	QString newSvgPath = m_userPartsFolderSvgPath + makeSvgPath2(m_currentGraphicsView);
+	FolderUtils::ensureDirectoryExists(newSvgPath);
 	QFile::copy(originalSvgPath, newSvgPath);
 
 	S2S s2s(false);

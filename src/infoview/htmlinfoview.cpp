@@ -19,11 +19,14 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 ********************************************************************/
 
 #include <QBuffer>
+#include <QCache>
 #include <QHBoxLayout>
 #include <QSettings>
 #include <QPalette>
 #include <QFontMetricsF>
 #include <QScrollBar>
+#include <QPainter>
+#include <QSvgRenderer>
 #include <qmath.h>
 
 #include "htmlinfoview.h"
@@ -35,6 +38,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../utils/clickablelabel.h"
 #include "../utils/textutils.h"
 #include "utils/misc.h"
+#include "items/partfactory.h"
 
 
 
@@ -509,14 +513,12 @@ void HtmlInfoView::appendItemStuff(ItemBase * itemBase, ModelPart * modelPart, b
 void HtmlInfoView::setContent()
 {
 	m_setContentTimer.stop();
-	//DebugDialog::debug(QString("start updating %1").arg(QTime::currentTime().toString("HH:mm:ss.zzz")));
 	if (m_pendingItemBase == nullptr) {
 		setNullContent();
 		m_setContentTimer.stop();
 		return;
 	}
 
-	//DebugDialog::debug(QString("pending %1").arg(m_pendingItemBase->title()));
 	m_currentSwappingEnabled = m_pendingSwappingEnabled;
 
 	appendStuff(m_pendingItemBase, m_pendingSwappingEnabled);
@@ -657,30 +659,75 @@ void HtmlInfoView::setUpTitle(ItemBase * itemBase)
 
 }
 
+// Cache inspector icon pixmaps by moduleID + viewID to avoid repeated file I/O and SVG rendering.
+// Cost is in bytes (160x160 RGBA = ~102KB per entry). 200 entries ~ 20MB max.
+static QCache<QString, QPixmap> & inspectorIconCache() {
+	static QCache<QString, QPixmap> cache(200);
+	return cache;
+}
+
+static const QPixmap * cachedIconFromSvg(ItemBase * itemBase, ViewLayer::ViewID vid, bool swappingEnabled, QSize size) {
+	if (itemBase == nullptr || itemBase->modelPart() == nullptr) return nullptr;
+
+	// Check visibility
+	if (itemBase->viewID() == vid) {
+		if (!itemBase->isEverVisible()) return nullptr;
+	} else {
+		ItemBase * vItemBase = itemBase->modelPart()->viewItem(vid);
+		if (vItemBase != nullptr && !vItemBase->isEverVisible()) return nullptr;
+	}
+
+	vid = itemBase->useViewIDForPixmap(vid, swappingEnabled);
+	if (vid == ViewLayer::UnknownView) return nullptr;
+
+	QString cacheKey = itemBase->modelPart()->moduleID() + "/" + QString::number(vid);
+	if (const QPixmap * cached = inspectorIconCache().object(cacheKey)) {
+		// DebugDialog::debug(QString("inspector icon cache hit: %1").arg(cacheKey));
+		return cached;
+	}
+
+	if (!itemBase->modelPart()->hasViewFor(vid)) return nullptr;
+
+	QString baseName = itemBase->modelPart()->hasBaseNameFor(vid);
+	if (baseName.isEmpty()) return nullptr;
+
+	QString filename = PartFactory::getSvgFilename(itemBase->modelPart(), baseName, true, true);
+	if (filename.isEmpty()) return nullptr;
+
+	QSvgRenderer renderer(filename);
+	if (!renderer.isValid()) return nullptr;
+
+	auto * pixmap = new QPixmap(size);
+	pixmap->fill(Qt::transparent);
+	QPainter painter(pixmap);
+	QSize def = renderer.defaultSize();
+	double newW = size.width();
+	double newH = newW * def.height() / def.width();
+	if (newH > size.height()) {
+		newH = size.height();
+		newW = newH * def.width() / def.height();
+	}
+	QRectF bounds((size.width() - newW) / 2.0, (size.height() - newH) / 2.0, newW, newH);
+	renderer.render(&painter, bounds);
+	painter.end();
+
+	// DebugDialog::debug(QString("inspector icon cache miss, loaded SVG: %1 from %2").arg(cacheKey, filename));
+	inspectorIconCache().insert(cacheKey, pixmap);
+	return pixmap;
+}
+
 void HtmlInfoView::setUpIcons(ItemBase * itemBase, bool swappingEnabled) {
 	if (m_lastIconItemBase == itemBase) return;
 
 	m_lastIconItemBase = itemBase;
 
-	QPixmap *pixmap1 = nullptr;
-	QPixmap *pixmap2 = nullptr;
-	QPixmap *pixmap3 = nullptr;
-
 	QSize size = QSize(ScaledIconFrame::STANDARD_ICON_IMG_WIDTH, ScaledIconFrame::STANDARD_ICON_IMG_HEIGHT);
 
-	if (itemBase != nullptr) {
-		itemBase->getPixmaps(pixmap1, pixmap2, pixmap3, swappingEnabled, size);
-	}
+	const QPixmap *pixmap1 = cachedIconFromSvg(itemBase, ViewLayer::BreadboardView, swappingEnabled, size);
+	const QPixmap *pixmap2 = cachedIconFromSvg(itemBase, ViewLayer::SchematicView, swappingEnabled, size);
+	const QPixmap *pixmap3 = cachedIconFromSvg(itemBase, ViewLayer::PCBView, swappingEnabled, size);
 
-	QPixmap* use1 = pixmap1;
-	QPixmap* use2 = pixmap2;
-	QPixmap* use3 = pixmap3;
-
-	m_iconFrame->setIcons(use1, use2, use3);
-
-	if (pixmap1 != nullptr) delete pixmap1;
-	if (pixmap2 != nullptr) delete pixmap2;
-	if (pixmap3 != nullptr) delete pixmap3;
+	m_iconFrame->setIcons(pixmap1, pixmap2, pixmap3);
 }
 
 void HtmlInfoView::addSpice(ModelPart * modelPart) {

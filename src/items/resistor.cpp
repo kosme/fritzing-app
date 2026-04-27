@@ -196,17 +196,28 @@ QString Resistor::makeSvg(const QString & resistance, ViewLayer::ViewLayerID vie
 
 	QString tolerance = prop("tolerance");
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
 	QString fn = (viewLayerID == ViewLayer::Breadboard) ? m_breadboardSvgFile : m_iconSvgFile;
 	QFile file(fn);
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(fn));
 	}
-	if (!domDocument.setContent(&file, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("makesvg failed %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = domDocument.setContent(&file, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("makesvg failed %1 %2 %3")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 		return "";
 	}
 

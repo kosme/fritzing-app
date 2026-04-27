@@ -43,6 +43,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "../model/modelpart.h"
 #include "../partseditor/peutils.h"
+#include <quazip/quazip.h>
 #include "../program/programwindow.h"
 #include "../project_properties.h"
 #include "../routingstatus.h"
@@ -530,8 +531,8 @@ protected:
 	void updatePCBTraceMenu(QGraphicsItem *, TraceMenuThing &);
 
 	QList<ModelPart*> moveToPartsFolder(QDir &unzipDir, bool addToBin, bool addToAlien, const QString & prefixFolder, const QString &destFolder, bool importingSinglePart);
-	QString copyToSvgFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder);
-	ModelPart* copyToPartsFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder);
+	QString copyToSvgFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder, const QString &moduleID = QString());
+	ModelPart* copyToPartsFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder, const QString &moduleID);
 
 	void closeIfEmptySketch(MainWindow* mw);
 	bool whatToDoWithAlienFiles();
@@ -648,7 +649,7 @@ protected:
 	virtual void setCurrentTabIndex(int);
 	virtual QWidget * currentTabWidget();
 	virtual bool activeLayerWidgetAlwaysOn();
-	bool copySvg(const QString & path, QFileInfoList & svgEntryInfoList);
+	bool copySvg(const QString & path, QFileInfoList & svgEntryInfoList, const QString &moduleID = QString());
 	void checkSwapObsolete(QList<ItemBase *> &, bool includeUpdateLaterMessage);
 	QMessageBox::StandardButton oldSchematicMessage(const QString & filename);
 	MainWindow * revertAux();
@@ -1002,6 +1003,9 @@ protected:
 
 private:
 	void validatePartInfo(const QString &fzpPath);
+	bool saveBundleDirectly(const QString &bundledFileName);
+	bool writeFileToZip(QuaZip *zip, const QString &filePath, const QString &fileNameInZip);
+	int writePartToZip(QuaZip *zip, ModelPart *mp);
 };
 
 #endif

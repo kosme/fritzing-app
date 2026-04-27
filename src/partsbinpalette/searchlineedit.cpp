@@ -26,12 +26,12 @@ SearchLineEdit::SearchLineEdit(QWidget * parent) : QLineEdit(parent)
 	mTimer.setInterval(2000);
 
 	connect(&mTimer, &QTimer::timeout,
-			this, [=]() {
+			this, [this]() {
 		Q_EMIT updateSearch(this->text());
 	});
 
 	connect(this, &QLineEdit::returnPressed,
-			this, [=]() {
+			this, [this]() {
 		mTimer.stop();
 		Q_EMIT updateSearch(this->text());
 	});

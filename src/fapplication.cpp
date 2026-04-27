@@ -607,6 +607,96 @@ int FApplication::init() {
 	qRegisterMetaType<QLocale>();
 	qRegisterMetaType<UploadPair>("UploadPair");
 
+	// Check version group and migrate settings if this version hasn't run before
+	// This must happen BEFORE any settings are read or written
+	{
+		QSettings settings;
+		QString shortVer = Version::shortVersion();
+		bool versionGroupExists = settings.childGroups().contains(shortVer);
+
+		if (versionGroupExists) {
+			DebugDialog::debug(QString("Fritzing %1 - loading existing settings (group [%2] found)")
+				.arg(Version::versionString(), shortVer));
+		}
+		else {
+			// Distinguish first-ever run from version upgrade
+			QString prevVersion = settings.value("version").toString();
+			QRegularExpression versionGroupRx("^\\d+\\.\\d+\\.\\d+");
+			bool hasAnyVersionGroup = false;
+			for (const QString& group : settings.childGroups()) {
+				if (versionGroupRx.match(group).hasMatch()) {
+					hasAnyVersionGroup = true;
+					break;
+				}
+			}
+
+			bool isFirstEverRun = prevVersion.isEmpty() && !hasAnyVersionGroup;
+
+			if (isFirstEverRun) {
+				DebugDialog::debug(QString("First start with Fritzing %1 - creating fresh settings")
+					.arg(Version::versionString()));
+			}
+			else {
+				DebugDialog::debug(QString("Version group [%1] not found - migrating settings")
+					.arg(shortVer));
+
+				// Settings to preserve during clear (includes "version" so old versions still see their own)
+				QStringList preserveKeys = {"pid", "language", "locale", "recentFileList", "version"};
+				if (FTesting::getInstance()->enabled()) {
+					preserveKeys.append("gerberExportImprovementsEnabled");
+				}
+
+				QMap<QString, QVariant> preserveValues;
+				int preservedCount = 0;
+				for (const QString& key : preserveKeys) {
+					QVariant value = settings.value(key);
+					if (!value.isNull()) {
+						preserveValues[key] = value;
+						preservedCount++;
+					}
+				}
+
+				// Preserve version-patterned groups for forward compatibility
+				QMap<QString, QMap<QString, QVariant>> versionGroups;
+				for (const QString& group : settings.childGroups()) {
+					if (versionGroupRx.match(group).hasMatch()) {
+						settings.beginGroup(group);
+						QMap<QString, QVariant> groupValues;
+						for (const QString& key : settings.allKeys()) {
+							groupValues[key] = settings.value(key);
+						}
+						settings.endGroup();
+						versionGroups[group] = groupValues;
+						DebugDialog::debug(QString("Settings migration - preserving version group [%1] with %2 key(s)")
+							.arg(group).arg(groupValues.size()));
+					}
+				}
+
+				settings.clear();
+
+				for (auto it = preserveValues.constBegin(); it != preserveValues.constEnd(); ++it) {
+					settings.setValue(it.key(), it.value());
+				}
+				for (auto git = versionGroups.constBegin(); git != versionGroups.constEnd(); ++git) {
+					settings.beginGroup(git.key());
+					for (auto kit = git.value().constBegin(); kit != git.value().constEnd(); ++kit) {
+						settings.setValue(kit.key(), kit.value());
+					}
+					settings.endGroup();
+				}
+
+				DebugDialog::debug(QString("Settings migration complete - preserved %1 setting(s) and %2 version group(s)")
+					.arg(preservedCount).arg(versionGroups.size()));
+			}
+
+			// Create version group marker (both first-run and migration)
+			settings.beginGroup(shortVer);
+			settings.setValue("migrated", Version::versionString());
+			settings.endGroup();
+			DebugDialog::debug(QString("Created version group [%1]").arg(shortVer));
+		}
+	}
+
 	QSettings settings;
 
 	if (!settings.contains("locale") || !settings.value("locale").canConvert<QLocale>()) {
@@ -1367,37 +1457,7 @@ int FApplication::startup()
 
 	ProcessEventBlocker::processEvents();
 
-	QString prevVersion;
-	{
-		// put this in a block so that QSettings is closed
-		QSettings settings;
-		prevVersion = settings.value("version").toString();
-		QString currVersion = Version::versionString();
-
-		if (prevVersion != currVersion) {
-			// Settings to preserve during clear
-			QStringList preserveKeys = {"pid", "language", "locale", "fps", "opengl"};
-			if (FTesting::getInstance()->enabled()) {
-				preserveKeys.append("gerberExportImprovementsEnabled");
-			}
-
-			// Store values we want to keep
-			QMap<QString, QVariant> preserveValues;
-			for (const QString& key : preserveKeys) {
-				QVariant value = settings.value(key);
-				if (!value.isNull()) {
-					preserveValues[key] = value;
-				}
-			}
-
-			settings.clear();
-
-			// Restore preserved values
-			for (auto it = preserveValues.constBegin(); it != preserveValues.constEnd(); ++it) {
-				settings.setValue(it.key(), it.value());
-			}
-		}
-	}
+	// Version check and settings clear now happens in init() before any settings are read/written
 
 	//bool fabEnabled = settings.value(ORDERFABENABLED, QVariant(false)).toBool();
 	//if (!fabEnabled) {
@@ -1416,7 +1476,7 @@ int FApplication::startup()
 	if (m_progressIndex >= 0) splash.showProgress(m_progressIndex, 0.65);
 	ProcessEventBlocker::processEvents();
 
-	loadSomething(prevVersion);
+	loadSomething();
 	m_started = true;
 
 	if (m_progressIndex >= 0) splash.showProgress(m_progressIndex, 0.99);
@@ -1449,9 +1509,8 @@ void FApplication::registerFont(const QString &fontFile, bool reallyRegister) {
 
 void FApplication::finish()
 {
-	QString currVersion = Version::versionString();
-	QSettings settings;
-	settings.setValue("version", currVersion);
+	// Version tracking is now handled by version groups created on startup.
+	// The legacy "version" key is preserved but no longer written.
 }
 
 void FApplication::loadNew(QString path) {
@@ -1817,7 +1876,7 @@ bool FApplication::notify(QObject *receiver, QEvent *e)
 	return false;
 }
 
-void FApplication::loadSomething(const QString & prevVersion) {
+void FApplication::loadSomething() {
 	// At this point we're trying to determine what sketches to load from one of the following sources:
 	// Only one of these sources will actually provide sketches to load and they're listed in order of priority:
 
@@ -1825,9 +1884,6 @@ void FApplication::loadSomething(const QString & prevVersion) {
 	//		Files were double-clicked
 	//		The last opened sketch (obsolete)
 	//		A new blank sketch
-
-
-	Q_UNUSED(prevVersion);
 
 	initFilesToLoad();   // sets up m_filesToLoad from the command line on PC and Linux; mac uses a FileOpen event instead
 

@@ -19,12 +19,12 @@
 # ********************************************************************
 
 QT_LEAST=6.2.0
-QT_MOST=6.9.1
+QT_MOST=6.11.0
 !versionAtLeast(QT_VERSION, $${QT_LEAST}):error("Use at least Qt version $${QT_LEAST}")
 !versionAtMost(QT_VERSION, $${QT_MOST}):error("Use at most Qt version $${QT_MOST}")
 
 CONFIG += debug_and_release
-CONFIG += c++17
+CONFIG += c++20
 
 unix {
     QMAKE_CXXFLAGS += -O3 -fno-omit-frame-pointer
@@ -85,7 +85,7 @@ macx {
     Debug:UI_DIR = $${DEBDIR}
 
     #QMAKE_MAC_SDK = macosx10.11            # uncomment/adapt for your version of OSX
-    CONFIG += x86_64 # x86 ppc
+    # CONFIG += x86_64 # x86 ppc
     QMAKE_INFO_PLIST = FritzingInfo.plist
     #DEFINES += QT_NO_DEBUG                # uncomment this for xcode
     LIBS += -lz
@@ -93,6 +93,7 @@ macx {
     LIBS += -framework Carbon
     LIBS += -framework IOKit
     LIBS += -liconv
+    QMAKE_APPLE_DEVICE_ARCHS = x86_64 arm64
 }
 unix {
     !macx { # unix is defined on mac

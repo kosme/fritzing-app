@@ -320,11 +320,6 @@ ConnectorItem::ConnectorItem( Connector * connector, ItemBase * attachedTo )
 		connector->addViewItem(this);
 	}
 	setAcceptHoverEvents(true);
-	this->setCursor((attachedTo && attachedTo->itemType() == ModelPart::Wire) ? *CursorMaster::BendpointCursor : *CursorMaster::MakeWireCursor);
-
-	//DebugDialog::debug(QString("%1 attached to %2")
-	//.arg(this->connector()->connectorShared()->id())
-	//.arg(attachedTo->modelPartShared()->title()) );
 }
 
 ConnectorItem::~ConnectorItem() {
@@ -1016,14 +1011,29 @@ void ConnectorItem::setInactive(bool inactivate) {
 }
 
 void ConnectorItem::setHiddenOrInactive() {
+	bool hasViews = (scene() && !scene()->views().isEmpty());
+
 	if (m_hidden || m_inactive || m_hybrid || m_layerHidden) {
 		this->setAcceptedMouseButtons(Qt::NoButton);
-		this->unsetCursor();
+		// Only unsetCursor if we have valid views AND the item actually has a cursor
+		if (hasViews) {
+			bool itemHasCursor = this->hasCursor();
+			if (itemHasCursor) {
+				this->unsetCursor();
+			}
+		}
 		setAcceptHoverEvents(false);
-	}
-	else {
+	} else {
 		this->setAcceptedMouseButtons(ALLMOUSEBUTTONS);
-		this->setCursor(attachedToItemType() == ModelPart::Wire ? *CursorMaster::BendpointCursor : *CursorMaster::MakeWireCursor);
+		// Only setCursor if we have valid cursor and views
+		if (hasViews) {
+			QCursor *acceptCursor = attachedToItemType() == ModelPart::Wire
+										? CursorMaster::BendpointCursor
+										: CursorMaster::MakeWireCursor;
+			if (acceptCursor) {
+				this->setCursor(*acceptCursor);
+			}
+		}
 		setAcceptHoverEvents(true);
 	}
 	this->update();
@@ -1956,7 +1966,7 @@ void ConnectorItem::debugInfo(const QString & msg)
 	            .arg(this->attachedToViewLayerID())
 	            .arg(this->attachedToViewID())
 	            .arg(this->attachedToViewLayerPlacement())
-	            .arg(this->attachedTo()->wireFlags())
+	            .arg(QVariant::fromValue(this->attachedTo()->wireFlags()).toString())
 	            .arg(this->m_hybrid)
 	            .arg((long long) this->bus(), 0, 16)
 	            .arg(this->m_radius)
@@ -2018,6 +2028,13 @@ ConnectorItem * ConnectorItem::findConnectorUnder(bool useTerminalPoint, bool al
 					return std::pow(this->sceneBoundingRect().center().x() - other->sceneBoundingRect().center().x(), 2) +
 						std::pow(this->sceneBoundingRect().center().y() - other->sceneBoundingRect().center().y(), 2);
 				};
+				// Prefer non-wire connectors over wire connectors
+				// Wire-to-wire connection should only win if there's no part connector nearby
+				bool aIsWire = (a->attachedToItemType() == ModelPart::Wire);
+				bool bIsWire = (b->attachedToItemType() == ModelPart::Wire);
+				if (aIsWire != bIsWire) {
+					return bIsWire;
+				}
 				if (a->zValue() == b->zValue()) {
 					return squaredDistanceTo(a) < squaredDistanceTo(b);
 				}

@@ -130,12 +130,23 @@ QByteArray FSvgRenderer::loadAux(const QByteArray & theContents, const LoadInfo 
 		cleanContents = string.toUtf8();
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(cleanContents, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("renderer loadAux failed %1 %2 %3 %4").arg(loadInfo.filename).arg(errorStr).arg(errorLine).arg(errorColumn));
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = doc.setContent(cleanContents);
+	#else
+	QString errorStr;
+	int errorLine, errorColumn;
+	bool parseResult = doc.setContent(cleanContents, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("renderer loadAux failed %1 %2 %3 %4")
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(loadInfo.filename).arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(loadInfo.filename).arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 	}
 
 	bool resetContents = false;

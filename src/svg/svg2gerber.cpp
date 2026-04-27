@@ -51,12 +51,22 @@ int SVG2gerber::convert(const QString & svgStr, bool doubleSided, const QString 
 {
 	m_boardSize = boardSize;
 	m_SVGDom = QDomDocument("svg");
+	// Add backwards compatibility for versions of Qt previous to 6.5
+	#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	QDomDocument::ParseResult parseResult = m_SVGDom.setContent(svgStr);
+	#else
 	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = m_SVGDom.setContent(svgStr, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
-		DebugDialog::debug(QString("gerber svg failed %2 %3 %4 %1").arg(svgStr).arg(errorStr).arg(errorLine).arg(errorColumn));
+	int errorLine, errorColumn;
+	bool parseResult = m_SVGDom.setContent(svgStr, &errorStr, &errorLine, &errorColumn);
+	#endif
+	if (!parseResult) {
+		DebugDialog::debug(QString("gerber svg failed %2 %3 %4 %1").arg(svgStr)
+		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
+		#else
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
+		#endif
+		);
 	}
 
 #ifndef QT_NO_DEBUG
@@ -299,6 +309,7 @@ int SVG2gerber::allPaths2gerber(ForWhy forWhy) {
 
 	m_holeApertures.clear();
 	m_platedApertures.clear();
+	m_overrideAperture.clear();
 
 	// iterates through all circles, rects, lines and paths
 	//  1. check if we already have an aperture
@@ -324,12 +335,15 @@ int SVG2gerber::allPaths2gerber(ForWhy forWhy) {
 	QDomNodeList pathList = m_SVGDom.elementsByTagName("path");
 	//DebugDialog::debug("paths to gerber: " + QString::number(pathList.length()));
 
-	// if this is the board outline, use it as the contour
+	// For board outline (contour), use a single fixed aperture
+	// Set override aperture string so standardAperture() uses it instead of element stroke-width
 	if (forWhy == ForOutline) {
 		//DebugDialog::debug("drawing board outline");
-
-		// switch aperture to the only one used for contour: note this is the last one on the list: the aperture is added at the end of this function
-		m_gerber_paths += m_G54 + "D10*\n";
+		// Board outline aperture width from settings (KiCad-compatible key, in mm)
+		// Default 0.2032mm = 0.008 inches (legacy Fritzing value)
+		double outlineWidthMm = QSettings().value("board_outline_line_width", 0.2032).toDouble();
+		double outlineWidthInches = outlineWidthMm / 25.4;
+		m_overrideAperture = QString("C,%1").arg(outlineWidthInches, 0, 'f', 6);
 	}
 
 	// circles
@@ -602,8 +616,8 @@ int SVG2gerber::allPaths2gerber(ForWhy forWhy) {
 				stroke_width += MaskClearance * 2 * milsPerInch;
 			}
 
-			if (path.attribute("stroke-linecap") == "square") {
-
+			if (path.attribute("stroke-linecap") == "square" && m_overrideAperture.isEmpty()) {
+				// Square linecap needs rectangular aperture (skip if override is set)
 				if (stroke_width != 0) {
 					QString aperture = QString("R,%1X%1").arg(stroke_width/milsPerInch, 0, 'f');
 
@@ -631,12 +645,6 @@ int SVG2gerber::allPaths2gerber(ForWhy forWhy) {
 
 		// light off
 		m_gerber_paths += "D02*\n";
-	}
-
-
-	if (forWhy == ForOutline) {
-		// add circular aperture with 0 width
-		m_gerber_header += "%ADD10C,0.008*%\n";
 	}
 
 	return invalidPathsCount;
@@ -705,12 +713,19 @@ void SVG2gerber::doPoly(QDomElement & polygon, ForWhy forWhy, bool closedCurve,
 }
 
 QString SVG2gerber::standardAperture(QDomElement & element, QHash<QString, QString> & apertureMap, QString & current_dcode, int & dcode_index, double stroke_width) {
-	if (stroke_width == 0) {
-		stroke_width = element.attribute("stroke-width").toDouble();
-	}
-	if (stroke_width == 0) return "";
+	QString aperture;
 
-	QString aperture = QString("C,%1").arg(stroke_width/milsPerInch, 0, 'f');
+	// If override aperture is set, use it instead of calculating from stroke-width
+	if (!m_overrideAperture.isEmpty()) {
+		aperture = m_overrideAperture;
+	} else {
+		if (stroke_width == 0) {
+			stroke_width = element.attribute("stroke-width").toDouble();
+		}
+		if (stroke_width == 0) return "";
+
+		aperture = QString("C,%1").arg(stroke_width/milsPerInch, 0, 'f');
+	}
 
 	// add aperture to defs if we don't have it yet
 	if (!apertureMap.contains(aperture)) {
@@ -727,7 +742,6 @@ QString SVG2gerber::standardAperture(QDomElement & element, QHash<QString, QStri
 	}
 
 	return aperture;
-
 }
 
 void SVG2gerber::handleOblongPath(QDomElement & path, int & dcode_index) {

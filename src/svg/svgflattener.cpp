@@ -398,19 +398,13 @@ QString SvgFlattener::flipSMDElement(QDomDocument & domDocument, QDomElement & e
 
 bool SvgFlattener::loadDocIf(const QString & filename, const QString & svg, QDomDocument & domDocument) {
 	if (domDocument.isNull()) {
-		QString errorStr;
-		int errorLine;
-		int errorColumn;
-		bool result;
-		if (filename.isEmpty()) {
-			result = domDocument.setContent(svg, &errorStr, &errorLine, &errorColumn);
-		}
-		else {
+		auto result = domDocument.setContent(svg);
+		if (!filename.isEmpty()) {
 			QFile file(filename);
 			if (!file.open(QIODevice::ReadOnly)) {
 				DebugDialog::debug(QString("Unable to open :%1").arg(filename));
 			}
-			result = domDocument.setContent(&file, &errorStr, &errorLine, &errorColumn);
+			result = domDocument.setContent(&file);
 		}
 		if (!result) {
 			domDocument.clear();			// probably redundant
