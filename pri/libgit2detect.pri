@@ -31,7 +31,6 @@ LIBGIT2LIB = $$LIBGITPATH/lib
 win32 {
 	if ($$LIBGIT_STATIC) {
 		LIBGIT2INCLUDE = "$$LIBGITPATH/include"
-		LIBGIT2LIB = "$$LIBGITPATH/lib"
 
 		exists($$LIBGIT2INCLUDE/git2.h) {
 			message("found libgit2 include path at $$LIBGIT2INCLUDE")
@@ -55,9 +54,7 @@ win32 {
 }
 
 unix {
-	LIBGIT2LIB = $$LIBGITPATH/lib
 	if ($$LIBGIT_STATIC) {
-
 		exists($$LIBGIT2LIB/libgit2.a) {
 			message("found libgit2 library in $$LIBGIT2LIB")
 		} else {
