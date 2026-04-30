@@ -1130,13 +1130,13 @@ QWidget *MainWindow::createSimulationButton(SketchAreaWidget *parent) {
 	stopSimulationButton->setIcon(QIcon(QPixmap(":/resources/images/icons/toolbarStopSimulationEnabled_icon.png")));
 	widget->addWidget(stopSimulationButton);
 
-	connect(normalModeAct, &QAction::triggered, this, [=]() {
+	connect(normalModeAct, &QAction::triggered, this, [this]() {
 		m_simulator->enableTransientSimulation(false);
 	});
-	connect(transientModeAct, &QAction::triggered, this, [=]() {
+	connect(transientModeAct, &QAction::triggered, this, [this]() {
 		m_simulator->enableTransientSimulation(true);
 	});
-	connect(transientModeAct, &QAction::triggered, this, [=]() {
+	connect(transientModeAct, &QAction::triggered, this, [this]() {
 		m_simulator->enableTransientSimulation(true);
 		FMessageBox::warning(
 					this,
