@@ -411,7 +411,7 @@ void Board::moreCheckImage(const QString & filename) {
 	QString nsvg = setBoardOutline(svg);
 
 	QDomDocument domDocument;
-	QDomDocument::ParseResult parseResult = domDocument.setContent(nsvg);
+	domDocument.setContent(nsvg);
 	QDomElement element = TextUtils::findElementWithAttribute(domDocument.documentElement(), "id", GerberGenerator::MagicBoardOutlineID);
 
 	int subpaths = 1;

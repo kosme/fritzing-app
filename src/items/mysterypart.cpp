@@ -144,6 +144,7 @@ QString MysteryPart::retrieveSvg(ViewLayer::ViewLayerID viewLayerID, QHash<QStri
 }
 
 QString MysteryPart::retrieveSchematicSvg(const QString & svg) {
+	Q_UNUSED(svg);
 	bool hasLocal = false;
 	QStringList labels = getPinLabels(hasLocal);
 

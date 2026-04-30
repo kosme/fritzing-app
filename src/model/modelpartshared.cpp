@@ -400,7 +400,7 @@ void ModelPartShared::initConnectors() {
 		DebugDialog::debug(QString("Unable to open :%1").arg(pathToUse));
 	}
 	QDomDocument doc;
-	QDomDocument::ParseResult parseResult = doc.setContent(&file);
+	doc.setContent(&file);
 
 	m_connectorsInitialized = true;
 

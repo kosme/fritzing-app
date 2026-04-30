@@ -128,6 +128,7 @@ QString Dip::genModuleID(QMap<QString, QString> & currPropsMap)
 }
 
 QString Dip::retrieveSchematicSvg(const QString & svg) {
+	Q_UNUSED(svg);
 	bool hasLocal = false;
 	QStringList labels = getPinLabels(hasLocal);
 
@@ -393,6 +394,7 @@ QString Dip::makeBreadboardDipSvg(const QString & expectedFileName)
 }
 
 bool Dip::changePinLabels(bool sip) {
+	Q_UNUSED(sip);
 	if (m_viewID != ViewLayer::SchematicView) return true;
 
 	bool hasLocal = false;

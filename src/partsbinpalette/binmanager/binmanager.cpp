@@ -766,7 +766,6 @@ void BinManager::hackLocalContrib(QList<BinLocation *> & locations)
 	}
 	QDomDocument contribDoc;
 	QDomDocument::ParseResult parseResult = contribDoc.setContent(&contribFile, QDomDocument::ParseOption::UseNamespaceProcessing);
-	bool result = parseResult.operator bool();
 	locations.removeOne(localContrib);
 	contribFile.close();
 	bool removed = contribFile.remove();
@@ -774,7 +773,7 @@ void BinManager::hackLocalContrib(QList<BinLocation *> & locations)
 		DebugDialog::debug("failed to remove contrib bin");
 	}
 
-	if (!result) return;
+	if (!parseResult) return;
 
 	QFile myPartsFile(myParts->path);
 	if (!myPartsFile.open(QIODevice::ReadOnly)) {
