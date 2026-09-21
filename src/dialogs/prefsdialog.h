@@ -76,6 +76,7 @@ protected:
 	void initCode(QWidget *widget, QList<Platform *> platforms);
 	void initBetaFeatures(QWidget *widget);
 	QWidget * createCurvyForm(ViewInfoThing *);
+	QWidget * createNetLabelStyleForm();
 
 protected Q_SLOTS:
 	void changeLanguage(int);
@@ -86,11 +87,13 @@ protected Q_SLOTS:
 	void toggleAutosave(bool);
 	void changeAutosavePeriod(int);
 	void curvyChanged();
+	void netLabelStyleChanged(class QAbstractButton *);
 	void chooseProgrammer();
     void setSimulationTimeStepMode(const bool &timeStepMode);
     void setSimulationNumberOfSteps(const QString &numberOfSteps);
     void setSimulationTimeStep(const QString &timeStep);
     void setSimulationAnimationTime(const QString &animationTime);
+	void setSimulationSpiceOptions(const QString &spiceOptions);
 
 protected:
 	QPointer<QTabWidget> m_tabWidget;

@@ -149,6 +149,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "pemetadataview.h"
 #include "peconnectorsview.h"
 #include "pecommands.h"
+#include "pehistoryentrydialog.h"
 #include "petoolview.h"
 #include "pesvgview.h"
 #include "pegraphicsitem.h"
@@ -175,7 +176,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../connectors/bus.h"
 #include "../installedfonts.h"
 #include "../dock/layerpalette.h"
-#include "../utils/cursormaster.h"
+#include "../utils/svgcursorbuilder.h"
 #include "../infoview/htmlinfoview.h"
 
 #include <QtDebug>
@@ -391,7 +392,7 @@ void PEMainWindow::closeEvent(QCloseEvent *event)
 	bool discard = true;
 	if (messages.count() > 0) {
 		QMessageBox messageBox(this);
-		messageBox.setWindowTitle(tr("Close without saving?"));
+		messageBox.setWindowTitle(tr("Close without saving?", "dialog title"));
 
 		QString message = tr("This part cannot be saved as-is:\n\n");
 		for (const QString &string : messages) {
@@ -481,12 +482,13 @@ void PEMainWindow::initSketchWidgets(bool whatever)
 
 	}
 
-	m_metadataView = new PEMetadataView(this);
+	m_metadataView = new PEMetadataView(m_referenceModel, this);
 	auto * sketchAreaWidget = new SketchAreaWidget(m_metadataView, this, false, false);
 	addTab(sketchAreaWidget, tr("Metadata"));
 	connect(m_metadataView, SIGNAL(metadataChanged(const QString &, const QString &)), this, SLOT(metadataChanged(const QString &, const QString &)), Qt::DirectConnection);
 	connect(m_metadataView, SIGNAL(tagsChanged(const QStringList &)), this, SLOT(tagsChanged(const QStringList &)), Qt::DirectConnection);
 	connect(m_metadataView, SIGNAL(propertiesChanged(const QHash<QString, QString> &)), this, SLOT(propertiesChanged(const QHash<QString, QString> &)), Qt::DirectConnection);
+	connect(m_metadataView, SIGNAL(historyChanged(const QList<HistoryEntry> &)), this, SLOT(historyChanged(const QList<HistoryEntry> &)), Qt::DirectConnection);
 
 	m_connectorsView = new PEConnectorsView(this);
 	sketchAreaWidget = new SketchAreaWidget(m_connectorsView, this, false, false);
@@ -547,6 +549,8 @@ void PEMainWindow::moreInitDock()
 		this -> setObjectName("PEInspector");
 	}
 
+	//: Title of the view-layers visibility palette (show/hide display layers).
+	//: "Layers" in the graphics sense — not the copper stackup.
 	makeDock(tr("Layers"), m_layerPalette, DockMinWidth, DockMinHeight)->hide();
 	m_layerPalette->setMinimumSize(DockMinWidth, DockMinHeight);
 	m_layerPalette->setShowAllLayersAction(m_showAllLayersAct);
@@ -812,12 +816,14 @@ bool PEMainWindow::setInitialItem(PaletteItem * paletteItem)
 
 	if (hasLegID && !RubberBandLegWarning) {
 		RubberBandLegWarning = true;
-		QMessageBox::warning(nullptr, tr("Parts Editor"),
-		                     tr("This part has bendable legs. ") +
-		                     tr("This version of the Parts Editor does not yet support editing bendable legs, and the legs may not be displayed correctly in breadboard view . ") +
-		                     tr("If you make changes to breadboard view, or change connector metadata, the legs may no longer work. ") +
-		                     tr("You can safely make changes to Schematic or PCB view.\n\n") +
-		                     tr("This warning will not be repeated in this session of Fritzing")
+		QMessageBox::warning(nullptr, tr("Parts Editor", "dialog title"),
+		                     tr("This part has bendable legs. "
+		                        "This version of the Parts Editor does not yet support editing bendable legs, "
+		                        "and the legs may not be displayed correctly in breadboard view. "
+		                        "If you make changes to breadboard view, or change connector metadata, "
+		                        "the legs may no longer work. "
+		                        "You can safely make changes to Schematic or PCB view.\n\n"
+		                        "This warning will not be repeated in this session of Fritzing")
 		                    );
 	}
 
@@ -913,14 +919,14 @@ bool PEMainWindow::setInitialItem(PaletteItem * paletteItem)
 		FolderUtils::ensureDirectoryExists(actualPath);
 		bool result = writeXml(actualPath, removeGorn(svg), true);
 		if (!result) {
-			QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to write svg to  %1").arg(svgPath));
+			QMessageBox::critical(nullptr, tr("Parts Editor", "dialog title"), tr("Unable to write svg to  %1").arg(svgPath));
 			return false;
 		}
 
 		QDomElement view = views.firstChildElement(ViewLayer::viewIDXmlName(viewThing->sketchWidget->viewID()));
 		QDomElement layers = view.firstChildElement("layers");
 		if (layers.isNull()) {
-			QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to parse fzp file  %1").arg(originalModelPart->path()));
+			QMessageBox::critical(nullptr, tr("Parts Editor", "dialog title"), tr("Unable to parse fzp file  %1").arg(originalModelPart->path()));
 			return false;
 		}
 
@@ -1040,7 +1046,7 @@ void PEMainWindow::changeSpecialProperty(const QString & name, const QString & v
 	QHash<QString, QString> oldProperties = getOldProperties();
 
 	if (value.isEmpty()) {
-		QMessageBox::warning(nullptr, tr("Blank not allowed"), tr("The value of '%1' can not be blank.").arg(name));
+		QMessageBox::warning(nullptr, tr("Blank not allowed", "dialog title"), tr("The value of '%1' can not be blank.").arg(name));
 		m_metadataView->resetProperty(name, value);
 		return;
 	}
@@ -1077,7 +1083,7 @@ void PEMainWindow::metadataChanged(const QString & name, const QString & value)
 			values.removeOne(moduleID);
 		}
 		if (values.count() > 0) {
-			QMessageBox::warning(nullptr, tr("Must be unique"), tr("Variant '%1' is in use. The variant name must be unique.").arg(value));
+			QMessageBox::warning(nullptr, tr("Must be unique", "dialog title"), tr("Variant '%1' is in use. The variant name must be unique.").arg(value));
 			return;
 		}
 
@@ -1154,18 +1160,123 @@ void PEMainWindow::changeTags(const QStringList & newTags, bool updateDisplay)
 	}
 }
 
+void PEMainWindow::historyChanged(const QList<HistoryEntry> & newHistory)
+{
+	// called from metadataView (mirrors tagsChanged)
+	QDomElement root = m_fzpDocument.documentElement();
+	QList<HistoryEntry> oldHistory = readHistory(root);
+
+	auto * chc = new ChangeHistoryCommand(this, oldHistory, newHistory, nullptr);
+	chc->setText(tr("Change revision history"));
+	chc->setSkipFirstRedo();
+	// updateDisplay=true: the edit came from a modal dialog, so the table must be rebuilt to show it
+	// (unlike tags/properties, whose inline widget already reflects the user's change).
+	changeHistory(newHistory, true);
+	m_undoStack->waitPush(chc, SketchWidget::PropChangeDelay);
+}
+
+void PEMainWindow::changeHistory(const QList<HistoryEntry> & history, bool updateDisplay)
+{
+	// called from command object
+	QDomElement root = m_fzpDocument.documentElement();
+	writeHistory(root, history);
+
+	if (updateDisplay) {
+		m_metadataView->initMetadata(m_fzpDocument);
+	}
+}
+
+QList<HistoryEntry> PEMainWindow::readHistory(const QDomElement & root)
+{
+	QList<HistoryEntry> history;
+	for (QDomElement h = root.firstChildElement("history"); !h.isNull(); h = h.nextSiblingElement("history")) {
+		HistoryEntry entry;
+		entry.date = h.attribute("date");
+		entry.author = h.attribute("author");
+		entry.mode = h.attribute("mode", "optional");   // default when mode= omitted
+		entry.description = h.text().trimmed();
+		history.append(entry);
+	}
+
+	// Legacy parts carry a top-level <date>/<author> but no <history> yet. Synthesize a single
+	// oldest entry (empty text is allowed for this auto-generated one) so the table isn't empty;
+	// writeHistory materializes it into a real <history> element when the history is next written.
+	if (history.isEmpty()) {
+		QString date = root.firstChildElement("date").text().trimmed();
+		QString author = root.firstChildElement("author").text().trimmed();
+		if (!date.isEmpty() || !author.isEmpty()) {
+			HistoryEntry entry;
+			entry.date = date;
+			entry.author = author;
+			entry.mode = "optional";
+			history.append(entry);
+		}
+	}
+
+	// oldest -> newest; null (undated) dates sort first
+	std::stable_sort(history.begin(), history.end(), [](const HistoryEntry & a, const HistoryEntry & b) {
+		return a.parsedDate() < b.parsedDate();
+	});
+	return history;
+}
+
+void PEMainWindow::writeHistory(QDomElement & root, const QList<HistoryEntry> & history)
+{
+	QDomDocument doc = root.ownerDocument();
+
+	// drop the existing <history> children
+	QDomElement h = root.firstChildElement("history");
+	while (!h.isNull()) {
+		QDomElement next = h.nextSiblingElement("history");
+		root.removeChild(h);
+		h = next;
+	}
+
+	QList<HistoryEntry> sorted = history;
+	std::stable_sort(sorted.begin(), sorted.end(), [](const HistoryEntry & a, const HistoryEntry & b) {
+		return a.parsedDate() < b.parsedDate();
+	});
+
+	// re-insert oldest -> newest, grouped just after the part's metadata so re-saving an existing
+	// part doesn't shove <history> to the bottom of the file
+	QDomElement anchor = root.firstChildElement("date");
+	if (anchor.isNull()) anchor = root.firstChildElement("author");
+	if (anchor.isNull()) anchor = root.firstChildElement("title");
+	if (anchor.isNull()) anchor = root.firstChildElement("version");
+	QDomNode after = anchor;
+	for (const HistoryEntry & entry : sorted) {
+		QDomElement he = doc.createElement("history");
+		he.setAttribute("date", entry.date);
+		he.setAttribute("author", entry.author);
+		he.setAttribute("mode", entry.mode.isEmpty() ? QString("optional") : entry.mode);
+		if (!entry.description.isEmpty()) {
+			he.appendChild(doc.createTextNode(entry.description));
+		}
+		if (after.isNull()) root.insertBefore(he, root.firstChild());
+		else root.insertAfter(he, after);
+		after = he;
+	}
+
+	// mirror the newest entry into the top-level <author>/<date> for backward compat
+	if (!sorted.isEmpty()) {
+		const HistoryEntry & newest = sorted.last();
+		TextUtils::replaceElementChildText(root, "author", newest.author);
+		TextUtils::replaceElementChildText(root, "date", newest.date);
+	}
+}
+
 void PEMainWindow::propertiesChanged(const QHash<QString, QString> & newProperties)
 {
 	qDebug() << "properties changed";
 
 	QStringList keys = newProperties.keys();
 	if (keys.contains("family", Qt::CaseInsensitive)) {
-		QMessageBox::warning(nullptr, tr("Duplicate problem"), tr("Duplicate 'family' property not allowed"));
+		QMessageBox::warning(nullptr, tr("Duplicate problem", "dialog title"), tr("Duplicate 'family' property not allowed"));
 		return;
 	}
 
 	if (keys.contains("variant", Qt::CaseInsensitive)) {
-		QMessageBox::warning(nullptr, tr("Duplicate problem"), tr("Duplicate 'variant' property not allowed"));
+		QMessageBox::warning(nullptr, tr("Duplicate problem", "dialog title"), tr("Duplicate 'variant' property not allowed"));
 		return;
 	}
 
@@ -1333,7 +1444,7 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 			if (parent0.attribute("id") == "copper1") ;
 			else if (parent1.attribute("id") == "copper0") ;
 			else {
-				QMessageBox::warning(nullptr, tr("SVG problem"),
+				QMessageBox::warning(nullptr, tr("SVG problem", "dialog title"),
 				                     tr("This version of the new Parts Editor can not deal with separate copper0 and copper1 layers in '%1'. ").arg(itemBase->filename()) +
 				                     tr("So editing may produce an invalid PCB view image"));
 			}
@@ -1557,14 +1668,14 @@ void PEMainWindow::loadImage()
 		newReferenceFile = getSvgReferenceFile(origPath);
 		QFile origFile(origPath);
 		if (!origFile.open(QFile::ReadOnly)) {
-			QMessageBox::warning(nullptr, tr("Conversion problem"), tr("Unable to load '%1'").arg(origPath));
+			QMessageBox::warning(nullptr, tr("Conversion problem", "dialog title"), tr("Unable to load '%1'").arg(origPath));
 			return;
 		}
 
 		svg = origFile.readAll();
 		origFile.close();
 		if (svg.contains("coreldraw", Qt::CaseInsensitive) && svg.contains("cdata", Qt::CaseInsensitive)) {
-			QMessageBox::warning(nullptr, tr("Conversion problem"),
+			QMessageBox::warning(nullptr, tr("Conversion problem", "dialog title"),
 			                     tr("The SVG file '%1' appears to have been exported from CorelDRAW without the 'presentation attributes' setting. ").arg(origPath) +
 			                     tr("Please re-export the SVG file using that setting, and try loading again.")
 			                    );
@@ -1583,7 +1694,7 @@ void PEMainWindow::loadImage()
 			bool reallyFixed = false;
 			TextUtils::fixFonts(svg, destFont, reallyFixed);
 			if (reallyFixed) {
-				QMessageBox::information(nullptr, tr("Fonts"),
+				QMessageBox::information(nullptr, tr("Fonts", "dialog title"),
 				                         tr("Fritzing currently only supports OCRA and Droid fonts--these have been substituted in for the fonts in '%1'").arg(origPath));
 			}
 		}
@@ -1591,12 +1702,11 @@ void PEMainWindow::loadImage()
 	else {
 		newReferenceFile = origPath;
 		if (origPath.endsWith("png") || origPath.endsWith("jpg") || origPath.endsWith("jpeg")) {
-			QString message = tr("You may use a PNG or JPG image to construct your part, but it is better to use an SVG. ") +
-			                  tr("PNG and JPG images retain their nature as bitmaps and do not look good when scaled--") +
-			                  tr("so for Fritzing parts it is best to use PNG and JPG only as placeholders.")
-			                  ;
+			QString message = tr("You may use a PNG or JPG image to construct your part, but it is better to use an SVG. "
+			                     "PNG and JPG images retain their nature as bitmaps and do not look good when scaled--"
+			                     "so for Fritzing parts it is best to use PNG and JPG only as placeholders.");
 
-			QMessageBox::information(nullptr, tr("Use of PNG and JPG discouraged"), message);
+			QMessageBox::information(nullptr, tr("Use of PNG and JPG discouraged", "dialog title"), message);
 
 		}
 
@@ -1604,13 +1714,13 @@ void PEMainWindow::loadImage()
 			svg = createSvgFromImage(origPath);
 		}
 		catch (const QString & msg) {
-			QMessageBox::warning(nullptr, tr("Conversion problem"), tr("Unable to load image file '%1':\n\n%2").arg(origPath).arg(msg));
+			QMessageBox::warning(nullptr, tr("Conversion problem", "dialog title"), tr("Unable to load image file '%1':\n\n%2").arg(origPath).arg(msg));
 			return;
 		}
 	}
 
 	if (svg.isEmpty()) {
-		QMessageBox::warning(nullptr, tr("Conversion problem"), tr("Unable to load image file '%1'").arg(origPath));
+		QMessageBox::warning(nullptr, tr("Conversion problem", "dialog title"), tr("Unable to load image file '%1'").arg(origPath));
 		return;
 	}
 
@@ -1624,11 +1734,11 @@ void PEMainWindow::loadImage()
 	bool parseResult = doc.setContent(svg.toUtf8(), &errorStr, &errorLine, &errorColumn);
 	#endif
 	if (!parseResult) {
-		QMessageBox::warning(nullptr, tr("SVG problem"), tr("Unable to parse '%1': %2 line:%3 column:%4").arg(origPath)
+		QMessageBox::warning(nullptr, tr("SVG problem", "dialog title"), tr("Unable to parse '%1': %2 line:%3 column:%4").arg(origPath)
 		#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0) 
 		.arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn)
 		#else
-		.arg(origPath).arg(errorStr).arg(errorLine).arg(errorColumn)
+		.arg(errorStr).arg(errorLine).arg(errorColumn)
 		#endif
 		);
 		return;
@@ -1641,13 +1751,12 @@ void PEMainWindow::loadImage()
 			check = TextUtils::findElementWithAttribute(root, "id", "copper0");
 		}
 		if (check.isNull()) {
-			QString message = tr("There are no copper layers defined in: %1. ").arg(origPath) +
-			                  tr("See <a href=\"http://fritzing.org/learning/tutorials/creating-custom-parts/providing-part-graphics/\">this explanation</a>.") +
-			                  tr("<br/><br/>This will not be a problem in the next release of the Parts Editor, ") +
-			                  tr("but for now please modify the file according to the instructions in the link.")
-			                  ;
+			QString message = tr("There are no copper layers defined in: %1. "
+			                     "See <a href=\"http://fritzing.org/learning/tutorials/creating-custom-parts/providing-part-graphics/\">this explanation</a>."
+			                     "<br/><br/>This will not be a problem in the next release of the Parts Editor, "
+			                     "but for now please modify the file according to the instructions in the link.").arg(origPath);
 
-			QMessageBox::warning(nullptr, tr("SVG problem"), message);
+			QMessageBox::warning(nullptr, tr("SVG problem", "dialog title"), message);
 			return;
 		}
 	}
@@ -1658,7 +1767,7 @@ void PEMainWindow::loadImage()
 	FolderUtils::ensureDirectoryExists(newPath);
 	bool success = writeXml(newPath, removeGorn(svg), true);
 	if (!success) {
-		QMessageBox::warning(nullptr, tr("Copy problem"), tr("Unable to make a local copy of: '%1'").arg(origPath));
+		QMessageBox::warning(nullptr, tr("Copy problem", "dialog title"), tr("Unable to make a local copy of: '%1'").arg(origPath));
 		return;
 	}
 
@@ -1805,7 +1914,7 @@ void PEMainWindow::reload(bool firstTime)
 {
 	Q_UNUSED(firstTime);
 
-	CursorMaster::instance()->addCursor(this, Qt::WaitCursor);
+	SvgCursorBuilder::instance()->addCursor(this, Qt::WaitCursor);
 
 	QList<ItemBase *> toDelete;
 
@@ -1886,7 +1995,7 @@ void PEMainWindow::reload(bool firstTime)
 	// processEventBlocker might be enough?
 	QTimer::singleShot(10, this, SLOT(initZoom()));
 
-	CursorMaster::instance()->removeCursor(this);
+	SvgCursorBuilder::instance()->removeCursor(this);
 
 }
 
@@ -2154,9 +2263,72 @@ bool PEMainWindow::saveAs() {
 	return saveAs(false);
 }
 
+// Next version for the save-gate "bump" checkbox: integer "4" -> "5"; dotted "1.1" -> "1.2" (bump the
+// last numeric run); empty -> "1"; otherwise unchanged.
+static QString bumpedVersion(const QString & current) {
+	QString v = current.trimmed();
+	if (v.isEmpty()) return QStringLiteral("1");
+	bool ok = false;
+	int n = v.toInt(&ok);
+	if (ok) return QString::number(n + 1);
+	int i = v.length() - 1;
+	while (i >= 0 && v.at(i).isDigit()) --i;
+	bool tailOk = false;
+	int tn = v.mid(i + 1).toInt(&tailOk);
+	if (tailOk) return v.left(i + 1) + QString::number(tn + 1);
+	return v;
+}
+
 bool PEMainWindow::saveAs(bool overWrite)
 {
 	QStringList peAlienFiles;
+
+	// Save gate: when the part has unsaved changes, offer to record what changed in this
+	// revision (and optionally bump the version) before the file is written. A clean part saves with
+	// no gate; Cancel aborts the save. Reuses the shared history-entry dialog.
+	{
+		QDomElement gateRoot = m_fzpDocument.documentElement();
+		if (!m_undoStack->isClean()) {
+			QString nextVersion = bumpedVersion(gateRoot.firstChildElement("version").text().trimmed());
+
+			QList<HistoryEntry> history = readHistory(gateRoot);
+			QString today = QDate::currentDate().toString(Qt::ISODate);
+			int todayRow = -1;
+			for (int i = history.count() - 1; i >= 0; --i) {
+				if (history.at(i).date == today) { todayRow = i; break; }
+			}
+			HistoryEntry seed;
+			if (todayRow >= 0) {
+				seed = history.at(todayRow);     // amend today's entry rather than add a duplicate
+			} else {
+				seed.date = today;
+				seed.author = gateRoot.firstChildElement("author").text().trimmed();
+				seed.mode = "optional";
+			}
+
+			PEHistoryEntryDialog gate(seed, false, nextVersion, this);
+			gate.setWindowTitle(tr("Save part"));
+			gate.setHeaderText(tr("You haven't recorded what changed in this revision."));
+			gate.setSaveGateButtons();
+			if (gate.exec() != QDialog::Accepted) return false;   // Cancel: abort the save
+
+			bool domChanged = false;
+			if (!gate.skipped() && gate.hasText()) {
+				QList<HistoryEntry> newHistory = history;
+				if (todayRow >= 0) newHistory[todayRow] = gate.entry();
+				else newHistory.append(gate.entry());
+				writeHistory(gateRoot, newHistory);    // also mirrors the newest entry into <author>/<date>
+				domChanged = true;
+			}
+			if (gate.bumpVersion()) {
+				QDomElement v = gateRoot.firstChildElement("version");
+				if (v.isNull()) { v = m_fzpDocument.createElement("version"); gateRoot.appendChild(v); }
+				TextUtils::replaceChildText(v, nextVersion);   // preserves the replacedby attribute
+				domChanged = true;
+			}
+			if (domChanged) m_metadataView->initMetadata(m_fzpDocument);
+		}
+	}
 
 	if (!overWrite) {
 		bool ok = false;
@@ -2193,19 +2365,26 @@ bool PEMainWindow::saveAs(bool overWrite)
 
 		if (affectedWindows.count() > 0 && !m_gaveSaveWarning) {
 			QMessageBox messageBox(this);
-			messageBox.setWindowTitle(tr("Sketch Change Warning"));
+			messageBox.setWindowTitle(tr("Sketch Change Warning", "dialog title"));
 			QString message;
 			if (affectedWindows.count() == 1) {
 				message = tr("The open sketch '%1' uses the part you are editing. ").arg(affectedWindows.first()->windowTitle());
 				message += tr("Saving this part will make a change to the sketch that cannot be undone.");
 			}
 			else {
-				message =  tr("The open sketches ");
-				for (int i = 0; i < affectedWindows.count() - 1; i++) {
-					message += tr("'%1', ").arg(affectedWindows.at(i)->windowTitle());
+				QStringList sketchNames;
+				for (int i = 0; i < affectedWindows.count(); i++) {
+					sketchNames << QString("'%1'").arg(affectedWindows.at(i)->windowTitle());
 				}
-				message += tr("and '%1' ").arg(affectedWindows.last()->windowTitle());
-				message += tr("Saving this part will make a change to these sketches that cannot be undone.");
+				QString sketchList;
+				if (sketchNames.count() == 2) {
+					sketchList = tr("%1 and %2").arg(sketchNames.at(0), sketchNames.at(1));
+				} else {
+					QString last = sketchNames.takeLast();
+					sketchList = sketchNames.join(", ") + tr(", and %1").arg(last);
+				}
+				message = tr("The open sketches %1 use the part you are editing. "
+				             "Saving this part will make a change to these sketches that cannot be undone.").arg(sketchList);
 
 			}
 			message += tr("\n\nGo ahead and save?");
@@ -2399,7 +2578,7 @@ bool PEMainWindow::saveAs(bool overWrite)
 			modelPart->setAlien(true);
 			Q_EMIT addToMyPartsSignal(modelPart, peAlienFiles);
 		} else {
-			QMessageBox::critical(nullptr, tr("Parts Editor Error"), tr("The file %2 with prefix %1 was not saved.").arg(m_prefix).arg(fzpPath));
+			QMessageBox::critical(nullptr, tr("Parts Editor Error", "dialog title"), tr("The file %2 with prefix %1 was not saved.").arg(m_prefix).arg(fzpPath));
 		}
 	}
 	else {
@@ -2799,7 +2978,7 @@ void PEMainWindow::setBeforeClosingText(const QString & filename, QMessageBox & 
 	Q_UNUSED(filename);
 
 	QString partTitle = getPartTitle();
-	messageBox.setWindowTitle(tr("Save \"%1\"").arg(partTitle));
+	messageBox.setWindowTitle(tr("Save \"%1\"", "dialog title").arg(partTitle));
 	messageBox.setText(tr("Do you want to save the changes you made in the part \"%1\"?").arg(partTitle));
 	messageBox.setInformativeText(tr("Your changes will be lost if you don't save them."));
 }
@@ -2840,7 +3019,7 @@ bool PEMainWindow::loadFzp(const QString & path) {
 	}
 	auto parseResult = m_fzpDocument.setContent(&file);
 	if (!parseResult) {
-		QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to load fzp from %1").arg(path));
+		QMessageBox::critical(nullptr, tr("Parts Editor", "dialog title"), tr("Unable to load fzp from %1").arg(path));
 		return false;
 	}
 
@@ -2897,7 +3076,7 @@ void PEMainWindow::connectorCountChanged(int newCount) {
 		tempDoc.setContent(m_removedConnector);
 		connectorModel = tempDoc.documentElement();
 		if (connectorModel.isNull()) {
-			QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to create new connector--you may have to start over."));
+			QMessageBox::critical(nullptr, tr("Parts Editor", "dialog title"), tr("Unable to create new connector--you may have to start over."));
 			return;
 		}
 	}
@@ -3103,7 +3282,7 @@ void PEMainWindow::deleteBusConnection() {
 	QString busID = bus.attribute("id");
 
 	if (nodeMember0.isNull() || nodeMember1.isNull()) {
-		QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Internal connections are very messed up."));
+		QMessageBox::critical(nullptr, tr("Parts Editor", "dialog title"), tr("Internal connections are very messed up."));
 		return;
 	}
 
@@ -3513,7 +3692,7 @@ void PEMainWindow::smdChanged(const QString & after) {
 	QDomElement svgCopper0 = TextUtils::findElementWithAttribute(svgRoot, "id", "copper0");
 	QDomElement svgCopper1 = TextUtils::findElementWithAttribute(svgRoot, "id", "copper1");
 	if (svgCopper0.isNull() && svgCopper1.isNull()) {
-		QMessageBox::critical(nullptr, tr("Parts Editor"), tr("Unable to parse '%1'").arg(itemBase->filename()));
+		QMessageBox::critical(nullptr, tr("Parts Editor", "dialog title"), tr("Unable to parse '%1'").arg(itemBase->filename()));
 		return;
 	}
 
@@ -3868,11 +4047,11 @@ void PEMainWindow::connectorWarning() {
 		Q_FOREACH (ViewLayer::ViewID viewID, unassigned.keys()) {
 			if (unassigned.value(viewID) > 0) viewCount++;
 		}
-		QMessageBox::warning(nullptr, tr("Parts Editor"),
-		                     tr("This part has %n unassigned connectors ", "", unassignedTotal) +
-		                     tr("across %n views. ", "", viewCount) +
-		                     tr("Until all connectors are assigned to SVG elements, the part will not work correctly. ") +
-		                     tr("Exiting the Parts Editor now is fine, as long as you remember to finish the assignments later.")
+		QMessageBox::warning(nullptr, tr("Parts Editor", "dialog title"),
+		                     tr("This part has %n unassigned connector(s). ", "", unassignedTotal) +
+		                     tr("This affects %n view(s). ", "", viewCount) +
+		                     tr("Until all connectors are assigned to SVG elements, the part will not work correctly. "
+		                        "Exiting the Parts Editor now is fine, as long as you remember to finish the assignments later.")
 		                    );
 	}
 

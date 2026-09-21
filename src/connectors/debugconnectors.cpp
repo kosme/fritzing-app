@@ -31,26 +31,25 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QEventLoop>
 #include <QLineF>
 
-DebugConnectors::DebugConnectors(SketchWidget *breadboardGraphicsView, SketchWidget *schematicGraphicsView, SketchWidget *pcbGraphicsView)
-	: m_breadboardGraphicsView(breadboardGraphicsView),
+DebugConnectors::DebugConnectors(SketchWidget *breadboardGraphicsView, SketchWidget *schematicGraphicsView, SketchWidget *pcbGraphicsView, QObject *parent)
+	: QObject(parent),
+	  m_breadboardGraphicsView(breadboardGraphicsView),
 	  m_schematicGraphicsView(schematicGraphicsView),
 	  m_pcbGraphicsView(pcbGraphicsView),
-	  timer(new QTimer(this)),
-	  firstCall(true),
-	  colorChanged(false)
+	  timer(new QTimer(this))
 {
 	monitorConnections(false);
 	timer->setSingleShot(true);
-	connect(timer, &QTimer::timeout, this, &DebugConnectors::onChangeConnection);
-	connect(m_breadboardGraphicsView,
+	connect(timer, &QTimer::timeout, this, &DebugConnectors::performCheck);
+	connect(breadboardGraphicsView,
 			&SketchWidget::routingCheckSignal,
 			this,
 			&DebugConnectors::onChangeConnection);
-	connect(m_schematicGraphicsView,
+	connect(schematicGraphicsView,
 			&SketchWidget::routingCheckSignal,
 			this,
 			&DebugConnectors::onChangeConnection);
-	connect(m_pcbGraphicsView,
+	connect(pcbGraphicsView,
 			&SketchWidget::routingCheckSignal,
 			this,
 			&DebugConnectors::onChangeConnection);
@@ -141,19 +140,34 @@ void DebugConnectors::onChangeConnection()
 	if (!m_monitorEnabled) {
 		return;
 	}
+	// Trailing-edge debounce: every signal restarts the timer; the check
+	// runs once after minimumInterval of silence. Multi-step parent commands
+	// (e.g. dragWireChanged building a clique) emit routingCheckSignal once
+	// per child ChangeConnectionCommand; coalescing into a single trailing
+	// tick avoids seeing the model mid-burst.
+	timer->start(minimumInterval);
+}
 
-	qint64 elapsed = lastExecution.elapsed();
-	if (!firstCall && elapsed < minimumInterval) {
-		if (!timer->isActive()) {
-			timer->start(minimumInterval - elapsed);
-		}
-	} else {
-		firstCall = false;
-		QSet<ItemBase *> errors;
-		errors = doRoutingCheck();
-		errors += doWireCheck();
-		reportErrors(errors);
+void DebugConnectors::performCheck()
+{
+	if (!m_monitorEnabled) {
+		return;
 	}
+	// This runs from a single-shot timer, so the views (or their scenes) may have been torn down
+	// since it was armed -- e.g. the example service closes one sketch window and pumps the event
+	// loop while loading the next. The QPointers null out on destruction; bail instead of crashing.
+	if (m_breadboardGraphicsView.isNull() || m_schematicGraphicsView.isNull() || m_pcbGraphicsView.isNull()) {
+		return;
+	}
+	if (m_breadboardGraphicsView->scene() == nullptr
+	        || m_schematicGraphicsView->scene() == nullptr
+	        || m_pcbGraphicsView->scene() == nullptr) {
+		return;
+	}
+	QSet<ItemBase *> errors;
+	errors = doRoutingCheck();
+	errors += doWireCheck();
+	reportErrors(errors);
 }
 
 void DebugConnectors::onSelectErrors()
@@ -173,7 +187,7 @@ void DebugConnectors::onRepairErrors()
 
 	stack->waitForTimers();
 	int index = stack->index();
-	auto views = {m_breadboardGraphicsView, m_schematicGraphicsView, m_pcbGraphicsView};
+	auto views = {m_breadboardGraphicsView.data(), m_schematicGraphicsView.data(), m_pcbGraphicsView.data()};
 	for(SketchWidget * view: views) {
 		stack->waitForTimers();
 		QSet<ItemBase *> errors = doRoutingCheck();
@@ -193,15 +207,6 @@ void DebugConnectors::onRepairErrors()
 	emit repairErrorsCompleted();
 }
 
-void DebugConnectors::fixColor() {
-	QList<SketchWidget *> views;
-	views << m_breadboardGraphicsView << m_schematicGraphicsView << m_pcbGraphicsView;
-	Q_FOREACH(SketchWidget * view, views) {
-		if (view->background() == QColor("red")) {
-			view->setBackgroundColor(view->standardBackground(), false);
-		}
-	}
-}
 
 QString rectAsString(QRectF rect)
 {
@@ -310,7 +315,6 @@ QSet<ItemBase *> DebugConnectors::doWireCheck()
 
 QSet<ItemBase *> DebugConnectors::doRoutingCheck() {
 	DebugDialog::debug("debug connectors do");
-	lastExecution.restart();
 	QHash<qint64, ItemBase *> bbID2ItemHash;
 	QHash<qint64, ItemBase *> pcbID2ItemHash;
 	QList<ItemBase *> bbList;
@@ -423,25 +427,23 @@ QSet<ItemBase *> DebugConnectors::doRoutingCheck() {
 
 void DebugConnectors::reportErrors(QSet<ItemBase *> errors)
 {
-	if (!errors.empty()) {
-		if (!colorChanged) {
-			fixColor();
-			breadboardBackgroundColor = m_breadboardGraphicsView->background();
-			schematicBackgroundColor = m_schematicGraphicsView->background();
-			pcbBackgroundColor = m_pcbGraphicsView->background();
+	QList<QPointer<ItemBase>> remaining;
+	for (auto & ptr : m_displayedBugs) {
+		if (ptr && !errors.contains(ptr.data())) {
+			ptr->clearBug(QStringLiteral("routing"));
+		} else if (ptr) {
+			remaining << ptr;
 		}
-		m_breadboardGraphicsView->setBackgroundColor(QColor("red"), false);
-		m_schematicGraphicsView->setBackgroundColor(QColor("red"), false);
-		m_pcbGraphicsView->setBackgroundColor(QColor("red"), false);
-		colorChanged = true;
-	} else {
-		if (colorChanged) {
-			m_breadboardGraphicsView->setBackgroundColor(breadboardBackgroundColor, false);
-			m_schematicGraphicsView->setBackgroundColor(schematicBackgroundColor, false);
-			m_pcbGraphicsView->setBackgroundColor(pcbBackgroundColor, false);
-			colorChanged = false;
-		} else {
-			fixColor();
+	}
+	m_displayedBugs = remaining;
+
+	for (ItemBase * item : errors) {
+		if (item) {
+			//: Bug marker attached to one part whose connectors differ between views.
+			//: "connector" = connection point (pin/pad); "views" = breadboard/schematic/pcb.
+			item->showBug(QStringLiteral("routing"),
+				QStringList() << tr("Routing error: connector mismatch between views."));
+			m_displayedBugs << QPointer<ItemBase>(item);
 		}
 	}
 }

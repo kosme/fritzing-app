@@ -836,12 +836,39 @@ bool TextUtils::addCopper1(const QString & filename, QDomDocument & domDocument,
 }
 
 QString TextUtils::convertToPowerPrefix(double q, char format, int precision) {
+	return convertToPowerPrefix(q, 100, format, precision);
+}
+
+QString TextUtils::convertToPowerPrefixByThousands(double q, char format, int precision) {
+	initPowerPrefixes();
+
+	if (q == 0) return QString::number(q, format, precision);
+
+	// Like convertToPowerPrefix, but keeps the mantissa in [1, 1000) so farad
+	// values avoid decimal prefixes. The range test is made against the rounded,
+	// to-be-displayed mantissa instead of a (1000 * PowerPrefixValues[i]) product:
+	// 1000 * 1e-9 evaluates to 1.0000000000000002e-6, which is greater than 1e-6,
+	// so a clean 1µF fell into the nano bucket and its mantissa rounded up to a
+	// spurious "1000n" (1µF was shown as 1000nF). Testing the displayed mantissa
+	// instead rolls such a value over to the next prefix, and is self-consistent
+	// because it can never emit a "1000" mantissa.
+	for (int i = 0; i < PowerPrefixes.count(); i++) {
+		QString mantissa = QString::number(q / PowerPrefixValues[i], format, precision);
+		if (qAbs(mantissa.toDouble()) < 1000.0) {
+			return mantissa + PowerPrefixes[i];
+		}
+	}
+
+	return QString::number(q, format, precision);
+}
+
+QString TextUtils::convertToPowerPrefix(double q, double prefixThreshold, char format, int precision) {
 	initPowerPrefixes();
 
 	if (q == 0) return QString::number(q, format, precision);
 
 	for (int i = 0; i < PowerPrefixes.count(); i++) {
-		if (abs(q) < 100 * PowerPrefixValues[i]) {
+		if (abs(q) < prefixThreshold * PowerPrefixValues[i]) {
 			q /= PowerPrefixValues[i];
 			return QString::number(q, format, precision) + PowerPrefixes[i];
 		}
@@ -862,6 +889,7 @@ double TextUtils::convertFromPowerPrefix(const QString & val, const QString & sy
 
 	double multiplier = 1;
 	QString temp = val;
+	temp.replace(',', '.');   // accept comma as a decimal separator (e.g. de_DE locale)
 	if (temp.endsWith(symbol)) {
 		temp.chop(symbol.length());
 	}
@@ -1547,9 +1575,33 @@ bool TextUtils::noUseAux(QDomDocument & svgDom)
 		QString refid = use.attribute("href");
 		QString id = use.attribute("id");
 
+		// honour <use> x/y as a supplemental translate (SVG semantics), appended to any transform
+		QString x = use.attribute("x");
+		QString y = use.attribute("y");
+		if (!x.isEmpty() || !y.isEmpty()) {
+			transform += QString(" translate(%1,%2)").arg(x.isEmpty() ? QString("0") : x, y.isEmpty() ? QString("0") : y);
+		}
+
+		// preserve faction markers (e.g. faction="lock") onto the <g> so a later DOM pass can
+		// still find them after flattening; capture the attribute handle before the node is detached
+		bool isFaction = use.hasAttribute("faction");
+		QDomNamedNodeMap useAttributes = use.attributes();
+
 		QDomElement g = svgDom.createElement("g");
 		use.parentNode().replaceChild(g, use);
 		g.setAttribute("transform", transform);
+
+		for (int a = 0; a < useAttributes.count(); a++) {
+			QDomAttr attr = useAttributes.item(a).toAttr();
+			if (!attr.isNull() && (attr.name() == "faction" || attr.name().startsWith("faction-"))) {
+				g.setAttribute(attr.name(), attr.value());
+			}
+		}
+		// a faction marker keeps its id on the <g> (not the clone, to avoid a duplicate id), since
+		// it is matched and removed by the renderer rather than rendered
+		if (isFaction) {
+			g.setAttribute("id", id);
+		}
 
 		if (refid.startsWith("#")) {
 			refid.remove(0, 1);
@@ -1561,7 +1613,9 @@ bool TextUtils::noUseAux(QDomDocument & svgDom)
 
 		QDomElement copy = toCopy.cloneNode(true).toElement();
 		g.appendChild(copy);
-		copy.setAttribute("id", id);
+		if (!isFaction) {
+			copy.setAttribute("id", id);
+		}
 	}
 
 	return true;
@@ -2387,4 +2441,3 @@ QFont TextUtils::textMetrics(const QDomElement & element) {
 	TextMetrics tm(element);
 	return tm.getFont();
 }
-

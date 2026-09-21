@@ -44,6 +44,7 @@ public:
 	static const QString NetLabelModuleIDName;
 	static const QString PowerLabelModuleIDName;
 	static const QString LeftNetLabelModuleIDName;
+	static const QString V5NetLabelModuleIDName;
 	static const QString JustPowerModuleIDName;
 	static const QString ResistorModuleIDName;
 	static const QString PhotocellModuleIDName;
@@ -81,6 +82,7 @@ public:
 	static const QString CopperBlockerModuleIDName;
 	static const QString Copper1BlockerModuleIDName;
 	static const QString Copper0BlockerModuleIDName;
+	static const QString OscilloscopeModuleIDName;
 };
 
 #endif

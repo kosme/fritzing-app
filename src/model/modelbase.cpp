@@ -79,7 +79,7 @@ bool ModelBase::loadFromFile(const QString & fileName, ModelBase * referenceMode
 	QFileInfo fileInfo(file);
 	QString onlyFileName = fileInfo.fileName();
 	if (!file.open(QFile::ReadOnly | QFile::Text)) {
-		FMessageBox::warning(nullptr, QObject::tr("Fritzing"),
+		FMessageBox::warning(nullptr, QObject::tr("Fritzing", "dialog title"),
 		                     QObject::tr("Cannot read file %1:\n%2.")
 		                     .arg(fileName)
 		                     .arg(file.errorString()));
@@ -114,14 +114,14 @@ bool ModelBase::loadFromFile(const QString & fileName, ModelBase * referenceMode
 
 	QDomElement root = domDocument.documentElement();
 	if (root.isNull()) {
-		FMessageBox::information(nullptr, QObject::tr("Fritzing"), QObject::tr("The file %1 is not a Fritzing file (2).").arg(fileName));
+		FMessageBox::information(nullptr, QObject::tr("Fritzing", "dialog title"), QObject::tr("The file %1 is not a Fritzing file (2).").arg(fileName));
 		return false;
 	}
 
 	Q_EMIT loadedRoot(fileName, this, root);
 
 	if (root.tagName() != "module") {
-		FMessageBox::information(nullptr, QObject::tr("Fritzing"), QObject::tr("The file %1 is not a Fritzing file (4).").arg(fileName));
+		FMessageBox::information(nullptr, QObject::tr("Fritzing", "dialog title"), QObject::tr("The file %1 is not a Fritzing file (4).").arg(fileName));
 		return false;
 	}
 
@@ -237,7 +237,7 @@ bool ModelBase::loadFromFile(const QString & fileName, ModelBase * referenceMode
 
 	QDomElement instances = root.firstChildElement("instances");
 	if (instances.isNull()) {
-		FMessageBox::information(nullptr, QObject::tr("Fritzing"), QObject::tr("The file %1 is not a Fritzing file (3).").arg(fileName));
+		FMessageBox::information(nullptr, QObject::tr("Fritzing", "dialog title"), QObject::tr("The file %1 is not a Fritzing file (3).").arg(fileName));
 		return false;
 	}
 
@@ -449,7 +449,7 @@ bool ModelBase::loadInstances(QDomDocument & domDocument, QDomElement & instance
 		}
 
 		FMessageBox* msgBox = FMessageBox::createCustom(nullptr, QMessageBox::Warning,
-		                                                QObject::tr("Fritzing"), mainMessage);
+		                                                QObject::tr("Fritzing", "dialog title"), mainMessage);
 		msgBox->setDetailedText(detailedInfo);
 		msgBox->enableClipboardButton(true);
 		msgBox->exec();
@@ -506,7 +506,7 @@ bool ModelBase::save(const QString & fileName, bool asPart) {
 	QString temp = dir.absoluteFilePath("temp.xml");
 	QFile file1(temp);
 	if (!file1.open(QFile::WriteOnly | QFile::Text)) {
-		FMessageBox::warning(nullptr, QObject::tr("Fritzing"),
+		FMessageBox::warning(nullptr, QObject::tr("Fritzing", "dialog title"),
 				     QObject::tr("Cannot write temp file. Save aborted. \n\nerror: %1\n\ntemp file: %2\n\ntarget file: %3.")
 				     .arg(file1.errorString())
 				     .arg(temp)
@@ -519,7 +519,7 @@ bool ModelBase::save(const QString & fileName, bool asPart) {
 	save(fileName, streamWriter, asPart);
 	file1.flush();
 	if (streamWriter.hasError() || file1.error() != QFile::NoError) {
-		FMessageBox::warning(nullptr, QObject::tr("Fritzing"),
+		FMessageBox::warning(nullptr, QObject::tr("Fritzing", "dialog title"),
 				     QObject::tr("Error while writing temp file. Save aborted. \n\nerror: %1\n\ntemp file: %2\n\ntarget file: %3.")
 				     .arg(file1.errorString())
 				     .arg(temp)
@@ -542,7 +542,17 @@ bool ModelBase::save(const QString & fileName, bool asPart) {
 		);
 		return false;
 	}
-	file1.rename(fileName);
+	if (!file1.rename(fileName)) {
+		FMessageBox::warning(
+		    nullptr,
+		    tr("File save failed!"),
+		    tr("Couldn't move the saved content into place at '%1'.\nReason: %2 (errcode %3)")
+		    .arg(fileName)
+		    .arg(file1.errorString())
+		    .arg(file1.error())
+		);
+		return false;
+	}
 	return true;
 }
 

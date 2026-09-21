@@ -33,6 +33,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QPixmap>
 #include <QTimer>
 #include <QStackedWidget>
+#include <QScrollArea>
 #include <QXmlStreamReader>
 #include <QShortcut>
 #include <QStyle>
@@ -62,6 +63,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../items/stripboard.h"
 #include "../items/partfactory.h"
 #include "../items/paletteitem.h"
+#include "../items/symbolpaletteitem.h"
+#include "../items/moduleidnames.h"
 #include "../items/virtualwire.h"
 #include "../processeventblocker.h"
 #include "../sketchtoolbutton.h"
@@ -83,10 +86,18 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../mainwindow/fprobefocuswidget.h"
 #include "FProbeCurrentSketchXml.h"
 #include "partsbinpalette/FProbeBin.h"
+#include "partsbinpalette/FProbeSearch.h"
 #include "model/fzpinfo.h"
 #include "connectors/debugconnectors.h"
 #include "connectors/debugconnectorsprobe.h"
 #include "testing/FTesting.h"
+#include "testing/FProbeWire.h"
+#include "testing/FProbePart.h"
+#include "testing/FProbeSelectedPartLabel.h"
+#include "testing/FProbeMigrationDialog.h"
+#include "testing/FProbeBugAnnotations.h"
+#include "items/partlabelcontextmenu.h"
+
 #include "servicelistfetcher.h"
 #include "utils/uploadpair.h"
 #include "version/version.h"
@@ -306,6 +317,13 @@ MainWindow::MainWindow(ReferenceModel *referenceModel, QWidget * parent) :
 	setStatusBar(m_statusBar);
 	m_statusBar->setSizeGripEnabled(false);
 
+	// hover hints live in a normal (non-permanent) widget: QStatusBar hides
+	// those while a temporary message is displayed, so hints never displace
+	// notifications and reappear once the message times out
+	m_statusHintLabel = new QLabel("", this);
+	m_statusHintLabel->setObjectName("StatusHintLabel");
+	m_statusBar->addWidget(m_statusHintLabel, 1);
+
 	QSettings settings;
 	m_locationLabelUnits = settings.value("LocationInches", "in").toString();
 
@@ -461,12 +479,15 @@ void MainWindow::init(ReferenceModel *referenceModel, bool lockFiles) {
 
 	m_breadboardGraphicsView->setItemMenu(breadboardItemMenu());
 	m_breadboardGraphicsView->setWireMenu(breadboardWireMenu());
+	m_breadboardGraphicsView->setPartLabelMenu(new PartLabelContextMenu(m_breadboardGraphicsView));
 
 	m_pcbGraphicsView->setWireMenu(pcbWireMenu());
 	m_pcbGraphicsView->setItemMenu(pcbItemMenu());
+	m_pcbGraphicsView->setPartLabelMenu(new PartLabelContextMenu(m_pcbGraphicsView));
 
 	m_schematicGraphicsView->setItemMenu(schematicItemMenu());
 	m_schematicGraphicsView->setWireMenu(schematicWireMenu());
+	m_schematicGraphicsView->setPartLabelMenu(new PartLabelContextMenu(m_schematicGraphicsView));
 
 	if (m_infoView != nullptr) {
 		m_breadboardGraphicsView->setInfoView(m_infoView);
@@ -515,18 +536,34 @@ void MainWindow::init(ReferenceModel *referenceModel, bool lockFiles) {
 	connect(fProbe, &FProbeDropByModuleID::putItemByModuleID, this, &MainWindow::putItemByModuleID);
 
 	new FProbeKeyPressEvents();
-	new FProbeCurrentSketchXml(m_sketchModel);
+	// CurrentSketchXml is stateless (it resolves the current window at read time),
+	// so a single instance serves every window; don't leak an identical one per window.
+	static bool currentSketchXmlProbeCreated = false;
+	if (!currentSketchXmlProbeCreated) {
+		new FProbeCurrentSketchXml();
+		currentSketchXmlProbeCreated = true;
+	}
 
 	FProbeFocusWidget *focusWidgetProbe = new FProbeFocusWidget();
 
 	connect(focusWidgetProbe, &FProbeFocusWidget::focusWidget, this, &MainWindow::handleFocusWidget);
 
 #ifndef QT_NO_DEBUG
-	m_debugConnectors = new DebugConnectors(m_breadboardGraphicsView, m_schematicGraphicsView, m_pcbGraphicsView);
+	// Parent to the MainWindow so it (and its single-shot timer) is destroyed when the window
+	// closes. Otherwise the orphaned checker outlives its views and a still-pending timer fires
+	// against freed memory -- the crash the headless example service ("-e") hit between sketches.
+	m_debugConnectors = new DebugConnectors(m_breadboardGraphicsView, m_schematicGraphicsView, m_pcbGraphicsView, this);
 #endif
 	new DebugConnectorsProbe(m_breadboardGraphicsView, m_schematicGraphicsView, m_pcbGraphicsView);
 
 	new FProbeBin(m_binManager);
+	new FProbeSearch(m_binManager);
+
+	new FProbeWire(this);
+	new FProbePart(this);
+	new FProbeSelectedPartLabel(this);
+	new FProbeMigrationDialog(this);
+	new FProbeBugAnnotations(this);
 
 	m_projectProperties = QSharedPointer<ProjectProperties>(new ProjectProperties());
 	m_serviceListFetcher = QSharedPointer<ServiceListFetcher>(new ServiceListFetcher());
@@ -555,6 +592,10 @@ MainWindow::~MainWindow()
 		FolderUtils::rmdir(m_fzzFolder);
 	}
 	delete m_undoShortcut;
+}
+
+SketchModel * MainWindow::sketchModel() const {
+	return m_sketchModel;
 }
 
 void MainWindow::initLockedFiles(bool lockFiles) {
@@ -694,6 +735,17 @@ void MainWindow::connectPairs() {
 	                                  this, SLOT(dropPaste(SketchWidget *))) != nullptr);
 	succeeded =  succeeded && (connect(m_pcbGraphicsView, SIGNAL(dropPasteSignal(SketchWidget *)),
 	                                  this, SLOT(dropPaste(SketchWidget *))) != nullptr);
+
+	// React when the user drops/pastes a part that creates a mix of two revisions of the
+	// same part (see onItemAddedToSketch, which filters to user-initiated drops via dropOrigin).
+	connect(m_breadboardGraphicsView, &SketchWidget::itemAddedSignal, this, &MainWindow::onItemAddedToSketch);
+	connect(m_schematicGraphicsView, &SketchWidget::itemAddedSignal, this, &MainWindow::onItemAddedToSketch);
+	connect(m_pcbGraphicsView, &SketchWidget::itemAddedSignal, this, &MainWindow::onItemAddedToSketch);
+
+	// The obsolete "bug" badge on a part is a clickable shortcut to update that one part.
+	connect(m_breadboardGraphicsView, &InfoGraphicsView::migrateObsoletePartSignal, this, &MainWindow::migrateObsoletePart);
+	connect(m_schematicGraphicsView, &InfoGraphicsView::migrateObsoletePartSignal, this, &MainWindow::migrateObsoletePart);
+	connect(m_pcbGraphicsView, &InfoGraphicsView::migrateObsoletePartSignal, this, &MainWindow::migrateObsoletePart);
 
 	succeeded =  succeeded && (connect(m_pcbGraphicsView, SIGNAL(subSwapSignal(SketchWidget *, ItemBase *, const QString &, ViewLayer::ViewLayerPlacement, long &, QUndoCommand *)),
 	                                  this, SLOT(subSwapSlot(SketchWidget *, ItemBase *, const QString &, ViewLayer::ViewLayerPlacement, long &, QUndoCommand *)),
@@ -1245,6 +1297,40 @@ void MainWindow::updateZoomSlider(double zoom) {
 	m_zoomSlider->setValue(zoom);
 }
 
+SketchWidget *MainWindow::currentGraphicsView() {
+	return m_currentGraphicsView;
+}
+
+SketchWidget *MainWindow::sketchWidgetForView(ViewLayer::ViewID viewID) {
+	switch (viewID) {
+	case ViewLayer::BreadboardView:
+		return m_breadboardGraphicsView;
+	case ViewLayer::SchematicView:
+		return m_schematicGraphicsView;
+	case ViewLayer::PCBView:
+		return m_pcbGraphicsView;
+	default:
+		return nullptr;
+	}
+}
+
+ItemBase *MainWindow::findItemInAnyView(qint64 id) {
+	// Cross-view items share the same id, but each view only knows its own items.
+	// Prefer the current view (so the part shows where the user is already looking),
+	// then fall back to the others.
+	QList<SketchWidget *> views;
+	if (m_currentGraphicsView) views << m_currentGraphicsView;
+	if (m_pcbGraphicsView) views << m_pcbGraphicsView;
+	if (m_schematicGraphicsView) views << m_schematicGraphicsView;
+	if (m_breadboardGraphicsView) views << m_breadboardGraphicsView;
+
+	Q_FOREACH (SketchWidget * view, views) {
+		ItemBase * item = view->findItem(id);
+		if (item != nullptr) return item;
+	}
+	return nullptr;
+}
+
 SketchAreaWidget *MainWindow::currentSketchArea() {
 	if (m_currentGraphicsView == nullptr) return nullptr;
 
@@ -1263,7 +1349,11 @@ void MainWindow::updateViewZoom(double newZoom) {
 
 void MainWindow::createStatusBar()
 {
-	m_statusBar->showMessage(tr("Ready"));
+	// timed: an untimed message posted before the window is shown never gets
+	// arbitrated against the hover hint label (QStatusBar only hides normal
+	// widgets that are visible when a message arrives), so "Ready" would
+	// overlap hints and suppress the bar until something else cleared it
+	statusMessage(tr("Ready"), StatusMessageTimeout);
 }
 
 void MainWindow::tabWidget_currentChanged(int index) {
@@ -1454,7 +1544,7 @@ bool MainWindow::whatToDoWithAlienFiles() {
 		QString basename = QFileInfo(m_fwFilename).fileName();
 		QMessageBox::StandardButton reply;
 		QString	alienPartsMsg = tr("Do you want to keep the imported parts?");
-		reply = QMessageBox::question(this, tr("Save %1").arg(basename),
+		reply = QMessageBox::question(this, tr("Save %1", "dialog title").arg(basename),
 									  alienPartsMsg,
 		                              QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
 
@@ -1579,7 +1669,10 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 		    tr("No Sketch found in '%1'").arg(fileName)
 		);
 
-		return "";
+		// A non-empty return signals failure to loadWhich(): a valid zip with no
+		// .fz is not a loadable sketch, so a File > Revert to it must keep the
+		// working window open instead of replacing it with an empty one (#1158).
+		return QString("No Sketch found in '%1'").arg(fileName);
 	}
 
 	QFileInfo sketchInfo = entryInfoList[0];
@@ -1617,7 +1710,22 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 		}
 
 		ModelPart * mp = m_referenceModel->retrieveModelPart(moduleID);
-		if (mp == nullptr) {
+		// If the currently loaded part is missing its definition or SVG files,
+		// use the copy bundled with the sketch.
+		bool loadedPartFilesMissing = (mp == nullptr) || !QFileInfo::exists(mp->path());
+		if (!loadedPartFilesMissing) {
+			for (ViewLayer::ViewID viewID : { ViewLayer::IconView, ViewLayer::BreadboardView, ViewLayer::SchematicView, ViewLayer::PCBView }) {
+				QString baseName = mp->hasBaseNameFor(viewID);
+				if (baseName.isEmpty()) continue;
+
+				if (PartFactory::getSvgFilename(mp, baseName, false, false).isEmpty()) {
+					loadedPartFilesMissing = true;
+					break;
+				}
+			}
+		}
+		const bool loadFromBundle = loadedPartFilesMissing;
+		if (loadFromBundle) {
 			QDomDocument doc;
 			// Add backwards compatibility for versions of Qt previous to 6.5
 			#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
@@ -1697,10 +1805,9 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 
 	// the bundled itself
 	bool result = this->mainLoad(sketchName, "", checkObsolete);
-
+	if (!result) return QString("Unable to load sketch: '%1' filename: %2").arg(sketchName).arg(fileName);
 
 	setCurrentFile(fileName, addToRecent, setAsLastOpened);
-	if (!result) return QString("Unable to load sketch: '%1' filename: %2").arg(sketchName).arg(fileName);
 	return "";
 }
 
@@ -2127,15 +2234,20 @@ bool MainWindow::saveBundleDirectly(const QString &bundledFileName) {
 		}
 	}
 
-	// 3. Collect and write non-core parts
+	// 3. Collect and write non-core parts from all views
 	QHash<QString, ModelPart *> saveParts;
-	for (QGraphicsItem *item : m_pcbGraphicsView->scene()->items()) {
-		auto *itemBase = dynamic_cast<ItemBase *>(item);
-		if (itemBase == nullptr) continue;
-		if (itemBase->modelPart() == nullptr) continue;
-		if (itemBase->modelPart()->isCore()) continue;
-		if (itemBase->moduleID().contains(PartFactory::OldSchematicPrefix)) continue;
-		saveParts.insert(itemBase->moduleID(), itemBase->modelPart());
+	const QList<SketchWidget *> views = {m_pcbGraphicsView, m_breadboardGraphicsView, m_schematicGraphicsView};
+	for (auto *view : views) {
+		if (view == nullptr || view->scene() == nullptr) continue;
+		for (QGraphicsItem *item : view->scene()->items()) {
+			auto *itemBase = dynamic_cast<ItemBase *>(item);
+			if (itemBase == nullptr) continue;
+			if (itemBase->modelPart() == nullptr) continue;
+			if (itemBase->modelPart()->isCore()) continue;
+			if (itemBase->moduleID().contains(PartFactory::OldSchematicPrefix)) continue;
+			if (saveParts.contains(itemBase->moduleID())) continue;
+			saveParts.insert(itemBase->moduleID(), itemBase->modelPart());
+		}
 	}
 
 	for (ModelPart *mp : saveParts.values()) {
@@ -2159,7 +2271,7 @@ bool MainWindow::saveBundleDirectly(const QString &bundledFileName) {
 		FMessageBox::warning(
 			this,
 			tr("Fritzing"),
-			tr("Save produced an empty archive for '%1'. Save aborted.")
+			tr("Could not save '%1' because the file would be empty. Please try again.")
 				.arg(bundledFileName));
 		return false;
 	}
@@ -2224,7 +2336,7 @@ void MainWindow::validatePartInfo(const QString &fzpPath)
 		auto msgBox = FMessageBox::createCustom(
 			this,
 			FMessageBox::Critical,
-			tr("Critical Issues"),
+			tr("Critical Issues", "dialog title"),
 			tr("Part '%1' has critical issues that prevent it from loading:\n\n%2")
 				.arg(info.title().isEmpty() ? info.path() : info.title(), info.getSummaryText()));
 		msgBox->setDetailedText(info.getDetailsText());
@@ -2235,7 +2347,7 @@ void MainWindow::validatePartInfo(const QString &fzpPath)
 		auto msgBox = FMessageBox::createCustom(
 			this,
 			FMessageBox::Warning,
-			tr("Warning"),
+			tr("Warning", "dialog title"),
 			tr("Part '%1' was loaded with warnings:\n\n%2")
 				.arg(info.title(), info.getSummaryText()),
 			FMessageBox::Ok);
@@ -2367,7 +2479,14 @@ ModelPart* MainWindow::copyToPartsFolder(const QFileInfo& file, bool addToAlien,
 			m_alienFiles << destFilePath;
 		}
 	}
-	ModelPart *mp = m_referenceModel->loadPart(destFilePath, true);
+	ModelPart *mp = nullptr;
+	// Replace a stale entry so later sketch loading resolves this module ID to
+	// the copied .fzp.
+	if (m_referenceModel->retrieveModelPart(moduleID) != nullptr) {
+		mp = m_referenceModel->reloadPart(destFilePath, moduleID);
+	} else {
+		mp = m_referenceModel->loadPart(destFilePath, true);
+	}
 	if (mp != nullptr) {
 		mp->setAlien(true);
 	} else {
@@ -2565,6 +2684,14 @@ void MainWindow::swapSelectedMap(const QString & family, const QString & prop, Q
 {
 	if (itemBase == nullptr) return;
 
+	// Net label "style" is not a DB-backed swap property: changing it between legacy and the
+	// aligned styles swaps the part (v4 <-> v5), and applies to the whole selection. Handle it
+	// here, before the generic family/property swap resolution.
+	if ((family.compare("net label", Qt::CaseInsensitive) == 0) && (prop.compare("style", Qt::CaseInsensitive) == 0)) {
+		swapNetLabelStyleForSelection(currPropsMap.value(prop));
+		return;
+	}
+
 	QString generatedModuleID = currPropsMap.value("moduleID");
 	bool logoPadBlocker = false;
 
@@ -2575,7 +2702,7 @@ void MainWindow::swapSelectedMap(const QString & family, const QString & prop, Q
 				if (value.contains("copper1") && m_currentGraphicsView->boardLayers() == 1) {
 					QMessageBox::warning(
 					    this,
-					    tr("No copper top layer"),
+					    tr("No copper top layer", "dialog title"),
 					    tr("The copper top (copper 1) layer is not available on a one-sided board.  Please switch the board to double-sided or choose the copper bottom (copper 0) layer.")
 					);
 					return;
@@ -2643,6 +2770,23 @@ void MainWindow::swapSelectedMap(const QString & family, const QString & prop, Q
 		return;
 	}
 
+	// Multi-selection: apply the chosen value to every selected part (each re-resolved from
+	// its own family/properties) in one undo, rather than only the active item.
+	if (m_currentGraphicsView != nullptr) {
+		int selectedParts = 0;
+		QList<ItemBase *> chiefs;
+		Q_FOREACH (QGraphicsItem * gItem, m_currentGraphicsView->scene()->selectedItems()) {
+			auto * ib = dynamic_cast<ItemBase *>(gItem);
+			if (ib == nullptr) continue;
+			ItemBase * chief = ib->layerKinChief();
+			if (!chiefs.contains(chief)) { chiefs.append(chief); ++selectedParts; }
+		}
+		if (selectedParts > 1) {
+			swapSelectionForProp(prop, currPropsMap.value(prop));
+			return;
+		}
+	}
+
 	Q_FOREACH (QString key, currPropsMap.keys()) {
 		QString value = currPropsMap.value(key);
 		m_referenceModel->recordProperty(key, value);
@@ -2654,7 +2798,7 @@ void MainWindow::swapSelectedMap(const QString & family, const QString & prop, Q
 	if (moduleID.isEmpty()) {
 		QMessageBox::information(
 		    this,
-		    tr("Sorry!"),
+		    tr("Sorry!", "dialog title"),
 		    tr(
 		        "No part with those characteristics.\n"
 		        "We're working to avoid this message, and only let you choose between properties that do exist")
@@ -2671,6 +2815,112 @@ void MainWindow::swapSelectedMap(const QString & family, const QString & prop, Q
 	}
 
 	swapSelectedAux(itemBase, moduleID, false, ViewLayer::UnknownPlacement, currPropsMap);
+}
+
+void MainWindow::swapSelectionForProp(const QString & prop, const QString & value)
+{
+	if (m_currentGraphicsView == nullptr) return;
+
+	// Unique selected parts (deduped by layer-kin chief).
+	QList<ItemBase *> items;
+	Q_FOREACH (QGraphicsItem * gItem, m_currentGraphicsView->scene()->selectedItems()) {
+		auto * ib = dynamic_cast<ItemBase *>(gItem);
+		if (ib == nullptr) continue;
+		ItemBase * chief = ib->layerKinChief();
+		if (!items.contains(chief)) items.append(chief);
+	}
+	if (items.isEmpty()) return;
+
+	auto * parentCommand = new QUndoCommand(tr("Change %1 of %n part(s)", "", items.count()).arg(prop));
+	new CleanUpWiresCommand(m_breadboardGraphicsView, CleanUpWiresCommand::UndoOnly, parentCommand);
+	new CleanUpRatsnestsCommand(m_breadboardGraphicsView, CleanUpWiresCommand::UndoOnly, parentCommand);
+
+	bool any = false;
+	Q_FOREACH (ItemBase * item, items) {
+		if (item->modelPart() == nullptr) continue;
+		QString family = item->modelPart()->family();
+
+		// Resolve this item's target part: its own properties with `prop` overridden,
+		// closest-matching on `prop` (so a part with the chosen value is found even when the
+		// exact combination doesn't exist).
+		const QHash<QString, QString> props = item->modelPart()->properties();
+		Q_FOREACH (const QString & key, props.keys()) {
+			if (key.compare("family", Qt::CaseInsensitive) == 0) continue;
+			QString v = (key.compare(prop, Qt::CaseInsensitive) == 0) ? value : item->getProperty(key);
+			m_referenceModel->recordProperty(key, v);
+		}
+		QString moduleID = m_referenceModel->retrieveModuleIdWith(family, prop, true);
+		if (moduleID.isEmpty() || (moduleID == item->moduleID())) continue;
+
+		QMap<QString, QString> propsMap;
+		propsMap.insert(prop, value);
+		swapSelectedAuxAux(item, moduleID, item->viewLayerPlacement(), propsMap, parentCommand);
+		any = true;
+	}
+
+	new CleanUpRatsnestsCommand(m_breadboardGraphicsView, CleanUpWiresCommand::RedoOnly, parentCommand);
+	new CleanUpWiresCommand(m_breadboardGraphicsView, CleanUpWiresCommand::RedoOnly, parentCommand);
+
+	if (any) {
+		m_undoStack->push(parentCommand);
+	} else {
+		delete parentCommand;
+	}
+}
+
+void MainWindow::swapNetLabelStyleForSelection(const QString & picked)
+{
+	if ((m_currentGraphicsView == nullptr) || picked.isEmpty()) return;
+
+	// Unique selected net labels (deduped by layer-kin chief). The whole net-label family
+	// (left/right facing, v4/v5) is matched by suffix.
+	QList<ItemBase *> netLabels;
+	Q_FOREACH (QGraphicsItem * gItem, m_currentGraphicsView->scene()->selectedItems()) {
+		auto * ib = dynamic_cast<ItemBase *>(gItem);
+		if (ib == nullptr) continue;
+		ItemBase * chief = ib->layerKinChief();
+		if (chief->moduleID().endsWith(ModuleIDNames::NetLabelModuleIDName) && !netLabels.contains(chief)) {
+			netLabels.append(chief);
+		}
+	}
+	if (netLabels.isEmpty()) return;
+
+	auto * parentCommand = new QUndoCommand(tr("Change style of %n net label(s)", "", netLabels.count()));
+	new CleanUpWiresCommand(m_breadboardGraphicsView, CleanUpWiresCommand::UndoOnly, parentCommand);
+	new CleanUpRatsnestsCommand(m_breadboardGraphicsView, CleanUpWiresCommand::UndoOnly, parentCommand);
+
+	bool any = false;
+	Q_FOREACH (ItemBase * item, netLabels) {
+		if (item->modelPart() == nullptr) continue;
+
+		QString newStyle;
+		QString target = SymbolPaletteItem::resolveStyleSwap(item, picked, newStyle);
+		if (!target.isEmpty()) {
+			// Cross the legacy boundary: swap the part. prepDeleteProps carries the net name,
+			// orientation and the chosen style across to the replacement.
+			QMap<QString, QString> propsMap;
+			propsMap.insert("style", newStyle);
+			swapSelectedAuxAux(item, target, item->viewLayerPlacement(), propsMap, parentCommand);
+			any = true;
+		}
+		else {
+			// Same part: just change the alignment.
+			QString oldStyle = item->modelPart()->localProp("style").toString();
+			if (newStyle != oldStyle) {
+				new SetPropCommand(m_currentGraphicsView, item->id(), "style", oldStyle, newStyle, true, parentCommand);
+				any = true;
+			}
+		}
+	}
+
+	new CleanUpRatsnestsCommand(m_breadboardGraphicsView, CleanUpWiresCommand::RedoOnly, parentCommand);
+	new CleanUpWiresCommand(m_breadboardGraphicsView, CleanUpWiresCommand::RedoOnly, parentCommand);
+
+	if (any) {
+		m_undoStack->push(parentCommand);
+	} else {
+		delete parentCommand;
+	}
 }
 
 bool MainWindow::swapSpecial(const QString & theProp, QMap<QString, QString> & currPropsMap) {
@@ -2834,7 +3084,7 @@ long MainWindow::swapSelectedAuxAux(ItemBase * itemBase, const QString & moduleI
 void MainWindow::svgMissingLayer(const QString & layername, const QString & path) {
 	QMessageBox::warning(
 	    this,
-	    tr("Fritzing"),
+	    tr("Fritzing", "dialog title"),
 	    tr("Svg %1 is missing a '%2' layer. "
 	       "For more information on how to create a custom board shape, "
 	       "see the tutorial at <a href='http://fritzing.org/learning/tutorials/designing-pcb/pcb-custom-shape/'>http://fritzing.org/learning/tutorials/designing-pcb/pcb-custom-shape/</a>.")
@@ -2914,8 +3164,26 @@ void MainWindow::redrawSketch() {
 
 void MainWindow::statusMessage(QString message, int timeout) {
 	QStatusBar * sb = realStatusBar();
-	if (sb != nullptr) {
-		sb->showMessage(message, timeout);
+	if (sb == nullptr) return;
+
+	if (message.isEmpty()) {
+		// hover handlers clear the bar with an empty message; a timed
+		// notification owns the bar until its timeout expires
+		if (!m_timedStatusMessage.isEmpty() && sb->currentMessage() == m_timedStatusMessage) {
+			return;
+		}
+		m_timedStatusMessage.clear();
+		sb->clearMessage();
+		return;
+	}
+
+	m_timedStatusMessage = (timeout > 0) ? message : QString();
+	sb->showMessage(message, timeout);
+}
+
+void MainWindow::statusHint(QString message) {
+	if (m_statusHintLabel) {
+		m_statusHintLabel->setText(message);
 	}
 }
 
@@ -2940,7 +3208,7 @@ bool MainWindow::save() {
 bool MainWindow::saveAs() {
 	bool convertSchematic = false;
 	if ((m_schematicGraphicsView != nullptr) && m_schematicGraphicsView->isOldSchematic()) {
-		QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Schematic conversion"),
+		QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Schematic conversion", "dialog title"),
 		                                    tr("Saving this sketch will convert it to the new schematic graphics standard. Go ahead and convert?"),
 		                                    QMessageBox::Yes | QMessageBox::No);
 		if (reply != QMessageBox::Yes) {
@@ -3051,13 +3319,22 @@ void  MainWindow::backupSketch() {
 		m_autosaveNeeded = false;			// clear this now in case the save takes a really long time
 
 		DebugDialog::debug(QString("%1 autosaved as %2").arg(m_fwFilename).arg(m_backupFileNameAndPath));
-		statusBar()->showMessage(tr("Backing up '%1'").arg(m_fwFilename), 2000);
+		statusMessage(tr("Backing up '%1'").arg(m_fwFilename), StatusMessageTimeout);
 		ProcessEventBlocker::processEvents();
 		m_backingUp = true;
 		connectStartSave(true);
-		m_sketchModel->save(m_backupFileNameAndPath, false);
+		bool backedUp = m_sketchModel->save(m_backupFileNameAndPath, false);
 		connectStartSave(false);
 		m_backingUp = false;
+
+		if (!backedUp) {
+			// The safety-net backup silently didn't happen (e.g. disk full).
+			// Tell the user now, while the cause is still knowable, and retry
+			// on the next autosave tick instead of pretending this one worked.
+			DebugDialog::debug(QString("backup of %1 to %2 failed").arg(m_fwFilename, m_backupFileNameAndPath));
+			statusMessage(tr("Backup of '%1' failed").arg(m_fwFilename), StatusMessageTimeout);
+			m_autosaveNeeded = true;
+		}
 	}
 }
 
@@ -3202,7 +3479,8 @@ void MainWindow::routingStatusLabelMouse(QMouseEvent*, bool show) {
 	}
 
 	if (!show && toShow.count() == 0) {
-		QMessageBox::information(this, tr("Unrouted connections"),
+		//: Shown for whichever view is active (breadboard/schematic/pcb) — keep the translation view-neutral.
+		QMessageBox::information(this, tr("Unrouted connections", "dialog title"),
 		                         tr("There are no unrouted connections in this view."));
 	}
 }
@@ -3411,11 +3689,6 @@ void MainWindow::initStyleSheet()
 	QStringList availableStyles = QStyleFactory::keys();
 	DebugDialog::DebugStream() << "Available styles:" << availableStyles.join(",");
 
-#ifdef Q_OS_WIN
-	// TODO: Replace this with windows11 style in Qt6.7? Also check qpa_platform setting in main.cpp (Qt < 6.5 setting)
-	// QApplication::setStyle("windowsvista");
-#endif
-
 	QString suffix = getStyleSheetSuffix();
 	QFile styleSheet(QString(":/resources/styles/%1.qss").arg(suffix));
 	if (!styleSheet.open(QIODevice::ReadOnly)) {
@@ -3517,6 +3790,18 @@ void MainWindow::showStatusMessage(const QString & message)
 
 	if (message == m_statusBar->currentMessage()) {
 		return;
+	}
+
+	if (message.isEmpty()
+	    && !m_timedStatusMessage.isEmpty()
+	    && m_statusBar->currentMessage() == m_timedStatusMessage) {
+		// leaving a menu clears its status tip; a timed notification
+		// owns the bar until its timeout expires
+		return;
+	}
+
+	if (!message.isEmpty()) {
+		m_timedStatusMessage.clear();
 	}
 
 	//DebugDialog::debug("show message " + message);
@@ -3716,13 +4001,65 @@ void MainWindow::putItemByModuleID(const QString & moduleID) {
 	}
 }
 
-void MainWindow::handleFocusWidget(const QString &objectName, int index)
+void MainWindow::handleFocusWidget(const QString &objectName, int index, const QString &property)
 {
 	QList<QWidget*> widgets = findChildren<QWidget*>(objectName);
-	if (index >= 0 && index < widgets.size()) {
-		QWidget *targetWidget = widgets[index];
-		targetWidget->setFocus();
+
+	// Debug: list every candidate so it is clear which editor the probe targets.
+	// Many inspector editors share the objectName "infoViewComboBox" (e.g. the
+	// package FamilyPropertyComboBox and the editable capacitance FocusOutComboBox),
+	// so plain index 0 can land on the wrong one.
+	DebugDialog::debug(QString("handleFocusWidget: objectName='%1' index=%2 property='%3' -> %4 candidate(s)")
+					   .arg(objectName).arg(index).arg(property).arg(widgets.size()));
+	for (int i = 0; i < widgets.size(); ++i) {
+		QWidget * w = widgets.at(i);
+		DebugDialog::debug(QString("  candidate[%1] class=%2 fProbeProperty='%3' visible=%4 rect=(%5,%6 %7x%8)")
+						   .arg(i)
+						   .arg(w->metaObject()->className())
+						   .arg(w->property("fProbeProperty").toString())
+						   .arg(w->isVisible())
+						   .arg(w->geometry().x()).arg(w->geometry().y())
+						   .arg(w->width()).arg(w->height()));
 	}
+
+	QWidget * targetWidget = nullptr;
+	if (!property.isEmpty()) {
+		// Disambiguate by the editor's fProbeProperty when several share an objectName.
+		for (QWidget * w : widgets) {
+			if (w->property("fProbeProperty").toString() == property) {
+				targetWidget = w;
+				break;
+			}
+		}
+		if (targetWidget == nullptr) {
+			DebugDialog::debug(QString("handleFocusWidget: no '%1' widget with fProbeProperty='%2' - focus unchanged").arg(objectName, property));
+			return;
+		}
+	} else if (index >= 0 && index < widgets.size()) {
+		targetWidget = widgets.at(index);
+	} else {
+		DebugDialog::debug(QString("handleFocusWidget: index %1 out of range (%2 candidate(s)) - focus unchanged").arg(index).arg(widgets.size()));
+		return;
+	}
+
+	// If the widget lives in a scroll area (e.g. an inspector editor below the fold),
+	// scroll it into view first; setFocus() on an off-screen widget does not reliably
+	// take the keyboard focus, so subsequent keystrokes (e.g. Ctrl+A) leak to the sketch.
+	for (QWidget * ancestor = targetWidget->parentWidget(); ancestor != nullptr; ancestor = ancestor->parentWidget()) {
+		if (auto * scrollArea = qobject_cast<QScrollArea *>(ancestor)) {
+			scrollArea->ensureWidgetVisible(targetWidget);
+			break;
+		}
+	}
+	targetWidget->setFocus(Qt::OtherFocusReason);
+
+	QWidget * focused = QApplication::focusWidget();
+	DebugDialog::debug(QString("handleFocusWidget: requested class=%1 fProbeProperty='%2'; actual focus class=%3 objectName='%4' fProbeProperty='%5'")
+					   .arg(targetWidget->metaObject()->className())
+					   .arg(targetWidget->property("fProbeProperty").toString())
+					   .arg(focused ? focused->metaObject()->className() : QString("(none)"))
+					   .arg(focused ? focused->objectName() : QString())
+					   .arg(focused ? focused->property("fProbeProperty").toString() : QString()));
 }
 
 bool MainWindow::isTransientSimulationEnabled() {

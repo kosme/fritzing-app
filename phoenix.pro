@@ -27,7 +27,9 @@ CONFIG += debug_and_release
 CONFIG += c++20
 
 unix {
-    QMAKE_CXXFLAGS += -O3 -fno-omit-frame-pointer
+    QMAKE_CXXFLAGS += -fno-omit-frame-pointer
+    QMAKE_CXXFLAGS_RELEASE -= -O2
+    QMAKE_CXXFLAGS_RELEASE += -O3
 }
 
 unix:!macx {
@@ -98,7 +100,7 @@ macx {
 unix {
     !macx { # unix is defined on mac
         HARDWARE_PLATFORM = $$system(uname -m)
-        contains(HARDWARE_PLATFORM, x86_64) {
+        contains(HARDWARE_PLATFORM, x86_64)|contains(HARDWARE_PLATFORM, aarch64) {
             DEFINES += LINUX_64
         } else {
             DEFINES += LINUX_32

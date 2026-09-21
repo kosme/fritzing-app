@@ -41,7 +41,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "partsbinpalette/svgiconwidget.h"
 #include "partsbinpalette/partsbinpalettewidget.h"
 #include "utils/ratsnestcolors.h"
-#include "utils/cursormaster.h"
+#include "utils/svgcursorbuilder.h"
 #include "utils/textutils.h"
 #include "utils/graphicsutils.h"
 #include "utils/uploadpair.h"
@@ -53,6 +53,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "items/pinheader.h"
 #include "items/partfactory.h"
 #include "items/propertydef.h"
+#include "items/symbolpaletteitem.h"
 #include "dialogs/recoverydialog.h"
 #include "processeventblocker.h"
 #include "autoroute/checker.h"
@@ -68,6 +69,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #define CurrentReferenceModel SqliteReferenceModel
 
 #include <QSettings>
+#include <QGraphicsScene>
 #include <QKeyEvent>
 #include <QFileInfo>
 #include <QDesktopServices>
@@ -330,13 +332,13 @@ void RegenerateDatabaseThread::run() {
 		file.close();
 	}
 	else {
-		m_error = tr("Unable to open temporary file") + " (" + fileName + ")";
+		m_error = tr("Unable to open temporary file (%1)").arg(fileName);
 		return;
 	}
 
 	bool ok = ((FApplication *) qApp)->loadReferenceModel(fileName, true, m_referenceModel);
 	if (!ok) {
-		m_error = tr("Database failure") + "\n" + m_referenceModel->error();
+		m_error = tr("Database failure\n%1").arg(m_referenceModel->error());
 		return;
 	}
 
@@ -762,7 +764,7 @@ int FApplication::init() {
 	SvgIconWidget::initNames();
 	PinHeader::initNames();
 	if (m_serviceType == ServiceType::NoService) {
-		CursorMaster::initCursors();
+		SvgCursorBuilder::initCursors();
 	}
 
 #ifdef Q_OS_MACOS
@@ -804,7 +806,7 @@ FApplication::~FApplication(void)
 	PartFactory::cleanup();
 	PartsBinView::cleanup();
 	PropertyDefMaster::cleanup();
-	CursorMaster::cleanup();
+	SvgCursorBuilder::cleanup();
 	LockManager::cleanup();
 	PartsBinPaletteWidget::cleanup();
 }
@@ -875,7 +877,7 @@ bool FApplication::eventFilter(QObject *obj, QEvent *event)
 			if (!kevent->isAutoRepeat() && (kevent->key() == Qt::Key_Space)) {
 				m_spaceBarIsPressed = true;
 				//DebugDialog::debug("spacebar pressed");
-				CursorMaster::instance()->block();
+				SvgCursorBuilder::instance()->block();
 				setOverrideCursor(Qt::OpenHandCursor);
 				Q_EMIT spaceBarIsPressedSignal(true);
 			}
@@ -891,7 +893,7 @@ bool FApplication::eventFilter(QObject *obj, QEvent *event)
 				m_spaceBarIsPressed = false;
 				//DebugDialog::debug("spacebar pressed");
 				restoreOverrideCursor();
-				CursorMaster::instance()->unblock();
+				SvgCursorBuilder::instance()->unblock();
 				Q_EMIT spaceBarIsPressedSignal(false);
 			}
 		}
@@ -1617,6 +1619,18 @@ void FApplication::updatePrefs(PrefsDialog & prefsDialog)
 				}
 			}
 		}
+		else if (key.compare("schemNetLabelStyle") == 0) {
+			SymbolPaletteItem::refreshDefaultNetLabelStyle();   // invalidate the cached default (QSettings already updated above)
+			Q_FOREACH (MainWindow * mainWindow, mainWindows) {
+				Q_FOREACH (SketchWidget * sketchWidget, mainWindow->sketchWidgets()) {
+					if (sketchWidget->scene() == nullptr) continue;
+					Q_FOREACH (QGraphicsItem * gItem, sketchWidget->scene()->items()) {
+						auto * symbol = dynamic_cast<SymbolPaletteItem *>(gItem);
+						if (symbol != nullptr) symbol->refreshNetLabelStyleFromDefault();
+					}
+				}
+			}
+		}
 	}
 
 }
@@ -1857,7 +1871,7 @@ bool FApplication::notify(QObject *receiver, QEvent *e)
 	catch (char const *str) {
 		FMessageBox::critical(
 					nullptr,
-					tr("Fritzing failure"),
+					tr("Fritzing failure", "dialog title"),
 					tr("Fritzing caught an exception %1 from %2 in event %3")
 					.arg(str)
 					.arg(receiver->objectName())
@@ -1865,10 +1879,10 @@ bool FApplication::notify(QObject *receiver, QEvent *e)
 	}
 	catch (std::exception& exp) {
 		qDebug() << QString("notify %1 %2").arg(receiver->metaObject()->className()).arg(e->type());
-		FMessageBox::critical(nullptr, tr("Fritzing failure"), tr("Fritzing caught an exception from %1 in event %2: %3").arg(receiver->objectName()).arg(e->type()).arg(exp.what()));
+		FMessageBox::critical(nullptr, tr("Fritzing failure", "dialog title"), tr("Fritzing caught an exception from %1 in event %2: %3").arg(receiver->objectName()).arg(e->type()).arg(exp.what()));
 	}
 	catch (...) {
-		FMessageBox::critical(nullptr, tr("Fritzing failure"), tr("Fritzing caught an exception from %1 in event %2").arg(receiver->objectName()).arg(e->type()));
+		FMessageBox::critical(nullptr, tr("Fritzing failure", "dialog title"), tr("Fritzing caught an exception from %1 in event %2").arg(receiver->objectName()).arg(e->type()));
 	}
 	closeAllWindows2();
 	QApplication::exit(-1);
@@ -1987,6 +2001,7 @@ QList<MainWindow *> FApplication::recoverBackups()
 	DebugDialog::debug(QString("Recovering %1 files from recoveryDialog").arg(fileItems.size()));
 	Q_FOREACH (QTreeWidgetItem * item, fileItems) {
 		auto backupName = item->data(0, Qt::UserRole).value<QString>();
+		bool keepBackup = false;
 		if (result == QDialog::Accepted && item->isSelected()) {
 			QString originalBaseName = item->text(0);
 			DebugDialog::debug(QString("Loading recovered sketch %1").arg(originalBaseName));
@@ -1996,14 +2011,30 @@ QList<MainWindow *> FApplication::recoverBackups()
 			QString bundledFileName = FolderUtils::getSaveFileName(nullptr, tr("Please specify an .fzz file name to save to (cancel will delete the backup)"), originalPath, tr("Fritzing (*%1)").arg(FritzingBundleExtension), &fileExt);
 			if (!bundledFileName.isEmpty()) {
 				MainWindow *currentRecoveredSketch = MainWindow::newMainWindow(m_referenceModel, originalBaseName, true, true, -1);
-				currentRecoveredSketch->mainLoad(backupName, bundledFileName, true);
-				currentRecoveredSketch->saveAsShareable(bundledFileName, true);
-				currentRecoveredSketch->setCurrentFile(bundledFileName, true, true);
+				bool loaded = currentRecoveredSketch->mainLoad(backupName, bundledFileName, true);
+				// Only save when the backup actually loaded. Saving an unloaded (empty)
+				// window would write a valid-but-empty .fzz over the user's chosen path
+				// and then let us delete the backup -- the data-loss path of issue #1158.
+				bool saved = loaded && currentRecoveredSketch->saveAsShareable(bundledFileName, true);
+				// Only record the file as current/recent when it was actually written.
+				// On a failed load nothing is saved, so pointing lastOpenSketch and the
+				// recent-files list at this (nonexistent) path would be wrong (issue #1158).
+				if (loaded) {
+					currentRecoveredSketch->setCurrentFile(bundledFileName, true, true);
+				}
 				recoveredSketches << currentRecoveredSketch;
+				// Keep the backup unless the recovery produced a real file on disk.
+				// A failed load, or a failed/empty save, must not destroy the last copy (issue #1158).
+				keepBackup = !loaded
+				             || !saved
+				             || !QFileInfo(bundledFileName).exists()
+				             || QFileInfo(bundledFileName).size() <= 22;  // 22 bytes = empty zip
 			}
 		}
 
-		QFile::remove(backupName);
+		if (!keepBackup) {
+			QFile::remove(backupName);
+		}
 	}
 
 	return recoveredSketches;
@@ -2046,6 +2077,22 @@ QList<MainWindow *> FApplication::orderedTopLevelMainWindows() {
 	return mainWindows;
 }
 
+MainWindow * FApplication::currentMainWindow() {
+	// Prefer the most-recently-activated sketch window (front of the list).
+	Q_FOREACH (QWidget * widget, m_orderedTopLevelWidgets) {
+		auto * mainWindow = qobject_cast<MainWindow *>(widget);
+		if (mainWindow != nullptr) return mainWindow;
+	}
+	// Fallback: m_orderedTopLevelWidgets is populated only on QEvent::WindowActivate,
+	// which may never fire under an offscreen/headless platform. Scan all top-level
+	// widgets so the probe still resolves a window (issue #1158).
+	Q_FOREACH (QWidget * widget, QApplication::topLevelWidgets()) {
+		auto * mainWindow = qobject_cast<MainWindow *>(widget);
+		if (mainWindow != nullptr) return mainWindow;
+	}
+	return nullptr;
+}
+
 void FApplication::runExampleService()
 {
 	m_started = true;
@@ -2075,7 +2122,9 @@ void FApplication::runExampleService(QDir & dir) {
 		else {
 			QList<ItemBase *> items = mainWindow->selectAllObsolete(false);
 			if (items.count() > 0) {
-				mainWindow->swapObsolete(false, items);
+				// Batch conversion: swap directly (no Part Migration dialog, which would be
+				// deferred past the save below) and synchronously upgrade every obsolete part.
+				mainWindow->swapObsoleteDirect(items, false);
 			}
 			mainWindow->saveAsAux(path);    //   path + "z"
 			mainWindow->setCloseSilently(true);
@@ -2270,9 +2319,9 @@ void FApplication::doCommand(const QString & command, const QString & params, QS
 
 void FApplication::regeneratePartsDatabase() {
 	QMessageBox messageBox;
-	messageBox.setWindowTitle(tr("Regenerate parts database?"));
-	messageBox.setText(tr("Regenerating the parts database will take some minutes and you will have to restart Fritzing\n\n") +
-	                   tr("Would you like to regenerate the parts database?\n")
+	messageBox.setWindowTitle(tr("Regenerate parts database?", "dialog title"));
+	messageBox.setText(tr("Regenerating the parts database will take some minutes and you will have to restart Fritzing\n\n"
+	                   "Would you like to regenerate the parts database?\n")
 	                  );
 	messageBox.setInformativeText(tr("This option is usefull if you modify the parts database on your own. "
 									 "If you want to recover from an error, "

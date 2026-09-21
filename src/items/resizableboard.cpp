@@ -81,8 +81,8 @@ Board::Board( ModelPart * modelPart, ViewLayer::ViewID viewID, const ViewGeometr
 	}
 
 	if (StandardCustomBoardExplanation.isEmpty()) {
-		StandardCustomBoardExplanation = tr("\n\nA custom board svg typically has one or two silkscreen layers and one board layer.\n") +
-		                                 tr("Have a look at the circle_pcb.svg file in your Fritzing installation folder at parts/svg/core/pcb/.\n\n");
+		StandardCustomBoardExplanation = tr("\n\nA custom board svg typically has one or two silkscreen layers and one board layer.\n"
+		                                    "Have a look at the circle_pcb.svg file in your Fritzing installation folder at parts/svg/core/pcb/.\n\n");
 	}
 
 	if (NamesToXmlNames.count() == 0) {
@@ -171,6 +171,11 @@ ItemBase::PluralType Board::isPlural() {
 
 bool Board::canFindConnectorsUnder() {
 	return false;
+}
+
+bool Board::lockSymbolAlwaysVisible() {
+	// not simply true: Pad, SchematicFrame and non-pcb logos also inherit Board
+	return isBoard(modelPart());
 }
 
 
@@ -536,7 +541,7 @@ QString Board::setBoardOutline(const QString & svg) {
 void Board::unableToLoad(const QString & fileName, const QString & reason) {
 	QMessageBox::information(
 	    nullptr,
-	    tr("Unable to load"),
+	    tr("Unable to load", "dialog title"),
 	    tr("Unable to load image from %1 %2").arg(fileName).arg(reason)
 	);
 }
@@ -544,7 +549,7 @@ void Board::unableToLoad(const QString & fileName, const QString & reason) {
 bool Board::canLoad(const QString & fileName, const QString & reason) {
 	QMessageBox::StandardButton answer = QMessageBox::question(
 	        nullptr,
-	        tr("Can load, but"),
+	        tr("Can load, but", "dialog title"),
 	        tr("The image from %1 can be loaded, but %2\nUse the file?").arg(fileName).arg(reason),
 	        QMessageBox::Yes | QMessageBox::No,
 	        QMessageBox::No
@@ -737,6 +742,22 @@ void ResizableBoard::mouseMoveEvent(QGraphicsSceneMouseEvent * event) {
 			else {
 				size.setHeight(ch);
 			}
+		}
+	}
+
+	// Grid-align the resize, toggled off by Ctrl just like a move (shouldAlignToGrid).
+	// Snap the actual (logical) size to a multiple of half the grid size -- not the
+	// position: the anchored corner stays put and only the size lands on the grid.
+	// sizeOffset() discounts the Pad's non-logical canvas margin so the copper, not
+	// the canvas, is what gets aligned. Done before resizePixels so the changePos
+	// anchoring below uses the snapped size too.
+	InfoGraphicsView * gridView = InfoGraphicsView::getInfoGraphicsView(this);
+	if (gridView != nullptr && gridView->shouldAlignToGrid()) {
+		double step = gridView->gridSizeInches() * GraphicsUtils::SVGDPI / 2.0;
+		if (step > 0) {
+			double off = sizeOffset();
+			size.setWidth(qMax(GraphicsUtils::getNearestOrdinate(size.width() - off, step) + off, off + step));
+			size.setHeight(qMax(GraphicsUtils::getNearestOrdinate(size.height() - off, step) + off, off + step));
 		}
 	}
 
@@ -1069,6 +1090,11 @@ void ResizableBoard::paperSizeChanged(int index) {
 	auto * comboBox = qobject_cast<QComboBox *>(sender());
 	if (comboBox == nullptr) return;
 
+	if (moveLock()) {
+		flashLockSymbol();
+		return;
+	}
+
 	QModelIndex modelIndex = comboBox->model()->index(index,0);
 	QSizeF size = comboBox->model()->data(modelIndex, Qt::UserRole).toSizeF();
 	InfoGraphicsView * infoGraphicsView = InfoGraphicsView::getInfoGraphicsView(this);
@@ -1088,6 +1114,11 @@ void ResizableBoard::widthEntry() {
 	double oldW = m_modelPart->localProp("width").toDouble();
 	if (w == oldW) return;
 
+	if (moveLock()) {
+		flashLockSymbol();
+		return;
+	}
+
 	double h =  m_modelPart->localProp("height").toDouble();
 
 	InfoGraphicsView * infoGraphicsView = InfoGraphicsView::getInfoGraphicsView(this);
@@ -1106,6 +1137,11 @@ void ResizableBoard::heightEntry() {
 	double h = text.toDouble();
 	double oldH =  m_modelPart->localProp("height").toDouble();
 	if (h == oldH) return;
+
+	if (moveLock()) {
+		flashLockSymbol();
+		return;
+	}
 
 	double w =  m_modelPart->localProp("width").toDouble();
 
@@ -1210,13 +1246,15 @@ void ResizableBoard::hoverMoveEvent( QGraphicsSceneHoverEvent * event ) {
 	switch (m_corner) {
 	case ResizableBoard::BOTTOM_RIGHT:
 	case ResizableBoard::TOP_LEFT:
+		// Diagonal resize: northwest-southeast (nwse-resize in CSS)
+		cursor = Qt::SizeFDiagCursor;
+		break;
 	case ResizableBoard::TOP_RIGHT:
 	case ResizableBoard::BOTTOM_LEFT:
-		//DebugDialog::debug("setting scale cursor");
-		cursor = *CursorMaster::ScaleCursor;
+		// Diagonal resize: northeast-southwest (nesw-resize in CSS)
+		cursor = Qt::SizeBDiagCursor;
 		break;
 	default:
-		//DebugDialog::debug("setting other cursor");
 		cursor = Qt::ArrowCursor;
 		break;
 	}
@@ -1484,6 +1522,11 @@ void ResizableBoard::keepAspectRatio(bool checkState) {
 }
 
 void ResizableBoard::revertSize(bool) {
+	if (moveLock()) {
+		flashLockSymbol();
+		return;
+	}
+
 	double ow = modelPart()->localProp("originalWidth").toDouble();
 	double oh = modelPart()->localProp("originalHeight").toDouble();
 

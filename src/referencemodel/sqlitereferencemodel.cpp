@@ -24,6 +24,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QSqlError>
 #include <QMessageBox>
 #include <QVector>
+#include <QSet>
 #include <QSqlResult>
 #include <QSqlDriver>
 #include <QDebug>
@@ -143,7 +144,7 @@ bool SqliteReferenceModel::loadAll(const QString & databaseName, bool fullLoad, 
 				message += FailurePartMessages.at(i);
 				message += ("\n");
 			}
-			message += "\n" + tr("and %1 other parts").arg(FailurePartMessages.count() - 4);
+			message += tr("\nand %1 other parts").arg(FailurePartMessages.count() - 4);
 		}
 		FMessageBox::warning(QApplication::activeWindow(), QObject::tr("Oops!"), message, QMessageBox::Ok);
 	}
@@ -160,7 +161,7 @@ bool SqliteReferenceModel::loadAll(const QString & databaseName, bool fullLoad, 
 				message += FailurePropertyMessages.at(i);
 				message += ("\n");
 			}
-			message += "\n" + tr("and %1 other properties").arg(FailurePropertyMessages.count() - 4);
+			message += tr("\nand %1 other properties").arg(FailurePropertyMessages.count() - 4);
 		}
 		FMessageBox::warning(QApplication::activeWindow(), QObject::tr("Oops!"), message, QMessageBox::Ok);
 	}
@@ -1246,6 +1247,33 @@ QStringList SqliteReferenceModel::propValues(const QString &family, const QStrin
 		m_swappingEnabled = false;
 	}
 
+	return retval;
+}
+
+// The de-duplicated set of every tag used across the parts library, sorted alphabetically.
+// Drives the autocomplete pool in the Parts Editor's tag field.
+//
+// NB: read from the in-memory ModelParts, not a "SELECT ... FROM tags". When the library is
+// loaded from the prebuilt parts.db (loadFromDB), parts/properties are copied into m_database
+// but tags are only attached to the ModelPart objects (setTag) -- the in-memory tags table is
+// never populated -- so querying it would return nothing. Tags are stored lower-cased.
+QStringList SqliteReferenceModel::allTags() {
+	QStringList retval;
+	QSet<QString> seen;     // case-insensitive de-dup
+
+	for (ModelPart * modelPart : m_partHash) {
+		if (modelPart == nullptr) continue;
+		Q_FOREACH (const QString & tag, modelPart->tags()) {
+			const QString trimmed = tag.trimmed();
+			if (trimmed.isEmpty()) continue;
+			const QString key = trimmed.toLower();
+			if (seen.contains(key)) continue;
+			seen.insert(key);
+			retval << trimmed;
+		}
+	}
+
+	retval.sort(Qt::CaseInsensitive);
 	return retval;
 }
 

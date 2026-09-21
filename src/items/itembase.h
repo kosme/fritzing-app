@@ -21,6 +21,9 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef ITEMBASE_H
 #define ITEMBASE_H
 
+#include "bugannotation.h"
+#include "itemdecorations.h"
+
 #include <QXmlStreamWriter>
 #include <QPointF>
 #include <QSize>
@@ -64,6 +67,7 @@ class FSvgRenderer;
 class LayerAttributes;
 class Connector;
 class ReferenceModel;
+
 class ItemBase : public QGraphicsSvgItem
 {
 	Q_OBJECT
@@ -154,6 +158,9 @@ public:
 	void setCanFlipVertical(bool);
 	virtual void clearModelPart();
 	virtual bool hasPartLabel();
+	// True if a property shown in the inspector depends on the item's transform (e.g. a
+	// net label's actual text alignment), so the inspector should rebuild on rotate/flip.
+	virtual bool inspectorRefreshOnTransform();
 	ViewLayer::ViewLayerID partLabelViewLayerID();
 	void clearPartLabel();
 	bool isPartLabelVisible();
@@ -192,6 +199,13 @@ public:
 	virtual void setProp(const QString & prop, const QString & value);
 	QString prop(const QString & p);
 	bool isObsolete();
+	void showBug(const QString & source, const QStringList & errors);
+	void clearBug(const QString & source);
+	void repositionBug();
+	bool hasBug() const;
+	QString bugText() const;
+	void updateObsoleteAnnotation();   // show/hide the "outdated part" badge per obsolete + silence state
+	bool bugAnnotationClicked();       // handle a click on the badge (returns true if it triggered migration)
 	virtual QHash<QString, QString> prepareProps(ModelPart *, bool wantDebug, QStringList & keys);
 	void resetValues(const QString & family, const QString & prop);
 	const QString & filename();
@@ -204,10 +218,17 @@ public:
 	const QString & moduleID();
 	bool moveLock();
 	virtual void setMoveLock(bool);
+	bool moveLockBlocksSelection(bool becomingSelected);
+	void updateLockSymbol();
+	virtual bool lockSymbolAlwaysVisible();
+	void flashLockSymbol();
+	void toggleMoveLockFromSymbol();
 	void debugInfo(const QString & msg) const;
 	void debugInfo2(const QString & msg) const;
 	virtual void addedToScene(bool temporary);
 	virtual bool hasPartNumberProperty();
+	virtual bool isBomItem();
+	QString electricalValue();
 	void collectPropsMap(QString & family, QMap<QString, QString> &);
 	virtual bool rotationAllowed();
 	virtual bool rotation45Allowed();
@@ -388,8 +409,8 @@ protected:
 	bool m_moveLock = false;
 	bool m_hasRubberBandLeg = false;
 	QList<ConnectorItem *> m_cachedConnectorItems;
-	QGraphicsSvgItem * m_moveLockItem = nullptr;
-	QGraphicsSvgItem * m_stickyItem = nullptr;
+	ItemDecorations m_decorations;
+	BugAnnotation m_bugAnnotation;
 	FSvgRenderer * m_fsvgRenderer = nullptr;
 	bool m_acceptsMousePressLegEvent = true;
 	bool m_swappable = true;

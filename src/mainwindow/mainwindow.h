@@ -150,14 +150,27 @@ struct TraceMenuThing {
 	}
 };
 
+class FProbeWire;
+class FProbePart;
+class FProbeSelectedPartLabel;
+
 class MainWindow : public FritzingWindow
 {
 	Q_OBJECT
+
+	friend class FProbeWire;
+	friend class FProbePart;
+	friend class FProbeSelectedPartLabel;
+
+	class SketchWidget * currentGraphicsView();
 
 	void setEnableSubmenu(QMenu *menu, bool value);
 	void save_text_file(QString text, QString actionType, QString dialogTitle, QString differentiator, QString errorMessage);
 
 public:
+	// standard duration for timed status bar messages ("Saved ...", "Sketch exported", ...)
+	static constexpr int StatusMessageTimeout = 4000;
+
 	MainWindow(class ReferenceModel *referenceModel, QWidget * parent);
 	MainWindow(QFile & fileToLoad);
 	~MainWindow();
@@ -196,14 +209,20 @@ public:
 	void setCurrentFile(const QString &fileName, bool addToRecent, bool setAsLastOpened);
 	void setReportMissingModules(bool);
 	QList<class SketchWidget *> sketchWidgets();
+	class SketchWidget * sketchWidgetForView(ViewLayer::ViewID viewID);
+	ItemBase * findItemInAnyView(qint64 id);
 	ProgramWindow * programmingWidget();
 	void setCloseSilently(bool);
 	class PCBSketchWidget * pcbView();
 	void noBackup();
 	void swapSelectedAux(ItemBase * itemBase, const QString & moduleID, bool useViewLayerPlacement, ViewLayer::ViewLayerPlacement, QMap<QString, QString> & propsMap);
+	void swapSelectionForProp(const QString & prop, const QString & value);
+	void swapNetLabelStyleForSelection(const QString & picked);
 	void swapLayers(ItemBase * itemBase, int layers, const QString & msg);
 	bool saveAsAux(const QString & fileName);
 	void swapObsolete(bool displayFeedback, QList<ItemBase *> &);
+	int swapObsoleteDirect(const QList<ItemBase *> & items, bool displayFeedback);
+	long swapPartForMigration(ItemBase * itemBase, const QString & newModuleID);
 	QList<ItemBase *> selectAllObsolete(bool displayFeedback);
 	void hideTempPartsBin();
 	const QString & fritzingVersion();
@@ -235,6 +254,17 @@ public:
 	static void setAutosavePeriod(int);
 	static void setAutosaveEnabled(bool);
 
+	// The shared Undo/Redo actions (they act on the active undo stack). Exposed so non-main-window
+	// widgets — e.g. the non-modal Part Migration dialog — can add them and let their keyboard
+	// shortcuts reach the sketch while that widget has focus.
+	QAction *undoAction() const { return m_undoAct; }
+	QAction *redoAction() const { return m_redoAct; }
+
+	// The sketch model backing this window. Used by the FTesting CurrentSketchXml
+	// probe to read the current window's sketch; null if it has been torn down.
+	// Defined in the .cpp: QPointer's conversion needs the complete SketchModel type.
+	class SketchModel * sketchModel() const;
+
 Q_SIGNALS:
 	void alienPartsDismissed();
 	void mainWindowMoved(QWidget *);
@@ -247,6 +277,7 @@ public Q_SLOTS:
 	QList<ModelPart *> loadPart(const QString &fileName, bool addToBin);
 	void acceptAlienFiles();
 	void statusMessage(QString message, int timeout);
+	void statusHint(QString message);
 	void showPCBView();
 	void groundFill();
 	void removeGroundFill();
@@ -257,6 +288,7 @@ public Q_SLOTS:
 	void changeBoardLayers(int layers, bool doEmit);
 	void selectAllObsolete();
 	void swapObsolete();
+	void migrateObsoletePart(qint64 itemId);
 	void swapBoardImageSlot(SketchWidget * sketchWidget, ItemBase * itemBase, const QString & filename, const QString & moduleID, bool addName);
 	void updateTraceMenu();
 	virtual void updateExportMenu();
@@ -268,7 +300,7 @@ public Q_SLOTS:
 	void oldSchematicsSlot(const QString & filename, bool & useOldSchematics);
 	void showWelcomeView();
 	void putItemByModuleID(const QString & moduleID);
-	void handleFocusWidget(const QString &objectName, int index);
+	void handleFocusWidget(const QString &objectName, int index, const QString &property);
 	void onServicesFetched(const QStringList& services);
 
 protected Q_SLOTS:
@@ -369,9 +401,9 @@ protected Q_SLOTS:
 
 	void newAutoroute();
 	void orderFab();
-	void activeLayerTop();
-	void activeLayerBottom();
-	void activeLayerBoth();
+	void activeLayerTop(bool showMessage = true);
+	void activeLayerBottom(bool showMessage = true);
+	void activeLayerBoth(bool showMessage = true);
 	void toggleActiveLayer();
 	void createTrace();
 	void excludeFromAutoroute();
@@ -482,6 +514,7 @@ protected:
 	void populateMenuFromXMLFile(QMenu *parentMenu, QStringList &actionsTracker, const QString &folderPath, const QString &indexFileName);
 	QHash<QString, struct SketchDescriptor *> indexAvailableElements(QDomElement &domElem, const QString &srcPrefix, QStringList & actionsTracker, const QString & localeName);
 	void populateMenuWithIndex(const QHash<QString, struct SketchDescriptor *> &, QMenu * parentMenu, QDomElement &domElem, const QString & localeName);
+	bool evaluateMenuRequires(const QString & requiresAttr);
 	void populateMenuFromFolderContent(QMenu *parentMenu, const QString &path);
 	void createOpenRecentMenu();
 	void createEditMenuActions();
@@ -507,6 +540,7 @@ protected:
 	void exportToGerber();
 	void exportBOM();
 	void exportBOM_CSV();
+	void exportBOM_PDF();
 	void exportNetlist();
 	void exportSpiceNetlist();
 	void exportSvg(double res, bool selectedItems, bool flatten);
@@ -650,7 +684,17 @@ protected:
 	virtual QWidget * currentTabWidget();
 	virtual bool activeLayerWidgetAlwaysOn();
 	bool copySvg(const QString & path, QFileInfoList & svgEntryInfoList, const QString &moduleID = QString());
-	void checkSwapObsolete(QList<ItemBase *> &, bool includeUpdateLaterMessage);
+	QList<class SketchWidget *> migrationScanViews();   // the non-null breadboard/schematic/pcb views
+	QList<ItemBase *> collectObsoleteAcrossViews();
+	bool hasObsoleteParts();
+	// Where a migration check was triggered from. Governs the per-mode prompt policy:
+	// forced (classic) prompts on Load + ManualUpdate (not mid-Drop); ask (soft) prompts on
+	// ManualUpdate always, on Load/Drop only when mixed; silent always auto-swaps.
+	enum class TriggerContext { Load, Drop, ManualUpdate };
+	QList<ItemBase *> routeHistoryMigrations(const QList<ItemBase *> & obsoleteItems, TriggerContext context);
+	void scheduleDropMigrationCheck();
+	void checkDroppedPartMigration();
+	void onItemAddedToSketch(ModelPart *, ItemBase *, ViewLayer::ViewLayerPlacement, const ViewGeometry &, long, class SketchWidget * dropOrigin);
 	QMessageBox::StandardButton oldSchematicMessage(const QString & filename);
 	MainWindow * revertAux();
 	void migratePartLabelOffset(QList<ModelPart*>);
@@ -679,6 +723,8 @@ protected:
 
 	QPointer<SketchAreaWidget> m_welcomeWidget;
 	class WelcomeView * m_welcomeView = nullptr;
+
+	bool m_migrationCheckPending = false;
 
 	QPointer<class BinManager> m_binManager;
 	QPointer<QWidget> m_tabWidget;
@@ -758,6 +804,7 @@ protected:
 	QAction *m_exportEtchableSvgAct = nullptr;
 	QAction *m_exportBomAct = nullptr;
 	QAction *m_exportBomCsvAct = nullptr;
+	QAction *m_exportBomPdfAct = nullptr;
 	QAction *m_exportIpcAct = nullptr;
 	QAction *m_exportNetlistAct = nullptr;
 	QAction *m_exportSpiceNetlistAct = nullptr;
@@ -939,6 +986,8 @@ protected:
 	QPointer<class ZoomSlider> m_zoomSlider;
 	QPointer<QLabel> m_locationLabel;
 	QString m_locationLabelUnits;
+	QString m_timedStatusMessage;
+	QPointer<QLabel> m_statusHintLabel;
 
 	QByteArray m_externalProcessOutput;
 
@@ -980,6 +1029,7 @@ protected:
 	// exporting
 	QGraphicsItem * m_watermark;
 	QList<QGraphicsItem*> m_selectedItems;
+	QList<QGraphicsItem*> m_hiddenForExport;
 	QColor m_bgColor;
 	QSharedPointer<ProjectProperties> m_projectProperties;
 	QSharedPointer<ServiceListFetcher> m_serviceListFetcher;
